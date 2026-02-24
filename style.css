@@ -63,6 +63,21 @@ input[type="file"] {
   background: #fafafa;
 }
 
+.options {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+select,
+input[type="number"] {
+  padding: 10px;
+  border: 1px solid #d6d6d6;
+  border-radius: 10px;
+  background: #fff;
+  font-size: 14px;
+}
+
 .toggle {
   display: flex;
   align-items: center;
