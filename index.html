@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>밀크런 MRB 정렬 도구</title>
+    <link rel="stylesheet" href="./style.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
+    <script src="./main.js" defer></script>
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>밀크런 MRB 정렬 도구</h1>
+        <p class="subtitle">PDF + 엑셀 기준으로 MRB를 순서대로 정렬합니다.</p>
+      </header>
+
+      <section class="card">
+        <label class="field">
+          <span>밀크런 운송장 PDF</span>
+          <input id="pdfInput" type="file" accept="application/pdf" />
+        </label>
+        <label class="field">
+          <span>엑셀 파일(xlsx)</span>
+          <input id="excelInput" type="file" accept=".xlsx" />
+        </label>
+        <label class="toggle">
+          <input id="showFcToggle" type="checkbox" />
+          <span>FC 제목 포함 보기</span>
+        </label>
+        <div class="actions">
+          <button id="parseBtn">분석</button>
+          <button id="copyBtn" class="secondary" disabled>복사</button>
+        </div>
+        <p id="status" class="notice">PDF와 엑셀을 선택한 뒤 분석을 눌러주세요.</p>
+        <div id="errorBox" class="error" hidden></div>
+      </section>
+
+      <section class="card" id="resultSection" hidden>
+        <h2>MRB 출력</h2>
+        <textarea id="resultText" rows="16" readonly></textarea>
+      </section>
+    </main>
+  </body>
+</html>
