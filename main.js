@@ -370,7 +370,10 @@ const ui = {
   copyVerifyBtn: null,
   resultLabel: null,
   arrivalInput: null,
-  arrivalHint: null
+  arrivalHint: null,
+  arrivalTextInput: null,
+  arrivalDateInput: null,
+  arrivalWarn: null
 };
 
 function ensureStatsSection() {
@@ -716,25 +719,100 @@ function ensureArrivalDateInput() {
   field.className = "field";
   const label = document.createElement("span");
   label.textContent = "입고예정일자 (필수)";
-  const input = document.createElement("input");
-  input.type = "date";
-  input.id = "arrivalDate";
+  label.style.fontSize = "12px";
+  label.style.color = "#555";
+
+  const inputWrap = document.createElement("div");
+  inputWrap.style.display = "flex";
+  inputWrap.style.alignItems = "center";
+  inputWrap.style.gap = "6px";
+  inputWrap.style.marginTop = "6px";
+
+  const textInput = document.createElement("input");
+  textInput.type = "text";
+  textInput.id = "arrivalDateText";
+  textInput.placeholder = "YYYY-MM-DD";
+  textInput.inputMode = "numeric";
+  textInput.style.width = "200px";
+  textInput.style.padding = "8px 10px";
+  textInput.style.border = "1px solid #d0d0d0";
+  textInput.style.borderRadius = "6px";
+
+  const calendarBtn = document.createElement("button");
+  calendarBtn.type = "button";
+  calendarBtn.textContent = "달력";
+  calendarBtn.className = "secondary";
+  calendarBtn.style.padding = "8px 10px";
+  calendarBtn.style.borderRadius = "6px";
+
+  const dateInput = document.createElement("input");
+  dateInput.type = "date";
+  dateInput.id = "arrivalDate";
+  dateInput.style.position = "absolute";
+  dateInput.style.opacity = "0";
+  dateInput.style.pointerEvents = "none";
+  dateInput.style.width = "0";
+  dateInput.style.height = "0";
+
   const hint = document.createElement("small");
   hint.textContent = "입고예정일자를 먼저 선택한 후 PDF/엑셀 파일을 업로드하세요.";
   hint.style.display = "block";
   hint.style.marginTop = "6px";
   hint.style.color = "#555";
+
+  const warn = document.createElement("small");
+  warn.textContent = "입고예정일자를 입력해 주세요.";
+  warn.style.display = "block";
+  warn.style.marginTop = "4px";
+  warn.style.color = "#b45f06";
+  warn.hidden = true;
+
+  inputWrap.appendChild(textInput);
+  inputWrap.appendChild(calendarBtn);
   field.appendChild(label);
-  field.appendChild(input);
+  field.appendChild(inputWrap);
+  field.appendChild(dateInput);
   field.appendChild(hint);
+  field.appendChild(warn);
   const pdfField = pdfInput.closest(".field");
   if (pdfField && pdfField.parentNode) {
     pdfField.parentNode.insertBefore(field, pdfField);
   } else {
     inputCard.appendChild(field);
   }
-  ui.arrivalInput = input;
+  ui.arrivalInput = textInput;
+  ui.arrivalTextInput = textInput;
+  ui.arrivalDateInput = dateInput;
   ui.arrivalHint = hint;
+  ui.arrivalWarn = warn;
+
+  calendarBtn.addEventListener("click", () => {
+    if (dateInput.showPicker) {
+      dateInput.showPicker();
+    } else {
+      dateInput.click();
+    }
+  });
+
+  dateInput.addEventListener("change", () => {
+    if (dateInput.value) {
+      textInput.value = dateInput.value;
+    }
+    updateInputAvailability();
+    updateArrivalWarning();
+  });
+
+  textInput.addEventListener("input", () => {
+    const normalized = normalizeDateInput(textInput.value);
+    if (normalized) {
+      dateInput.value = normalized;
+      textInput.value = normalized;
+    } else if (textInput.value.trim() === "") {
+      dateInput.value = "";
+    }
+    updateInputAvailability();
+    updateArrivalWarning();
+  });
 }
 
 function extractArrivalDateDetails(pages) {
@@ -784,14 +862,52 @@ function formatPageRanges(pages) {
   return ranges.join(", ");
 }
 
+function normalizeDateInput(raw) {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return "";
+  const normalized = trimmed.replace(/[./]/g, "-");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return "";
+  const [year, month, day] = normalized.split("-").map(Number);
+  const date = new Date(`${normalized}T00:00:00`);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return "";
+  if (date.getFullYear() !== year || date.getMonth() + 1 !== month || date.getDate() !== day) return "";
+  return normalized;
+}
+
+function updateArrivalWarning() {
+  if (!ui.arrivalTextInput || !ui.arrivalWarn) return;
+  const value = normalizeDateInput(ui.arrivalTextInput.value);
+  const shouldWarn = !value;
+  ui.arrivalWarn.hidden = !shouldWarn;
+  ui.arrivalTextInput.style.borderColor = shouldWarn ? "#f1c232" : "#d0d0d0";
+}
+
 function updateInputAvailability() {
-  const hasDate = !!(ui.arrivalInput && ui.arrivalInput.value);
+  const hasDate = !!(ui.arrivalTextInput && normalizeDateInput(ui.arrivalTextInput.value));
   pdfInput.disabled = !hasDate;
   excelInput.disabled = !hasDate;
   const hasFiles = !!(pdfInput.files?.length && excelInput.files?.length);
   parseBtn.disabled = !(hasDate && hasFiles);
   copyBtn.disabled = true;
   if (ui.copyVerifyBtn) ui.copyVerifyBtn.disabled = true;
+}
+
+function extractExcelArrivalDate(file) {
+  const fileName = file?.name || "";
+  const match = fileName.match(/^(\d{6})/);
+  if (!match) {
+    return { raw: "", date: "" };
+  }
+  const raw = match[1];
+  const year = Number.parseInt(raw.slice(0, 2), 10);
+  const month = raw.slice(2, 4);
+  const day = raw.slice(4, 6);
+  const fullYear = 2000 + year;
+  const normalized = `${fullYear}-${month}-${day}`;
+  if (!normalizeDateInput(normalized)) {
+    return { raw, date: "" };
+  }
+  return { raw, date: normalized };
 }
 
 async function handleParse() {
@@ -802,7 +918,7 @@ async function handleParse() {
   ensureArrivalDateInput();
   updateInputAvailability();
 
-  const selectedArrivalDate = ui.arrivalInput ? ui.arrivalInput.value : "";
+  const selectedArrivalDate = ui.arrivalTextInput ? normalizeDateInput(ui.arrivalTextInput.value) : "";
   if (!selectedArrivalDate) {
     showErrors(["입고예정일자를 선택해야 분석할 수 있습니다."]);
     setStatus("검증 실패: 입고예정일자 미선택");
@@ -874,16 +990,43 @@ async function handleParse() {
       setStatus("검증 실패: 입고예정일자 확인");
       return;
     }
-    const hasMismatch = dates.size > 1 || !dates.has(selectedArrivalDate);
+
+    const { raw: excelRaw, date: excelDate } = extractExcelArrivalDate(excelInput.files?.[0]);
+    if (!excelDate) {
+      showErrors(["완료 파일명에서 입고일(YYMMDD)을 찾지 못했습니다."]);
+      setStats({
+        totalExcelRows: rows.length,
+        totalPdfPages: pages.length,
+        totalPdfRecords: 0,
+        matchedCount: 0,
+        skippedCount: 0,
+        fatalErrorCount: 1,
+        unusedPdfCount: 0
+      });
+      setStatus("검증 실패: 완료 파일 입고일 확인");
+      return;
+    }
+
+    const pdfDates = Array.from(dates);
+    const pdfDate = pdfDates.length === 1 ? pdfDates[0] : "";
+    const pdfDateLabel = pdfDates.length === 0
+      ? "미발견"
+      : pdfDates.length > 1
+        ? "여러 날짜 감지"
+        : pdfDate;
+    const hasMismatch = pdfDates.length !== 1 || pdfDate !== selectedArrivalDate || excelDate !== selectedArrivalDate;
     if (hasMismatch) {
       const summary = Array.from(dateToPages.entries()).map(([date, pagesSet]) => {
         const pageInfo = formatPageRanges(pagesSet);
         return `PDF 날짜 ${date}: ${pageInfo}`;
       });
       showErrors([
-        "입고예정일 불일치로 분석 중단",
-        `선택한 날짜: ${selectedArrivalDate}`,
-        ...summary
+        "입고일 불일치로 분석을 중단했습니다",
+        `입력한 입고예정일: ${selectedArrivalDate}`,
+        `PDF 입고예정일자: ${pdfDateLabel}`,
+        `완료 파일 입고일(파일명): ${excelDate} (원본 ${excelRaw})`,
+        ...summary,
+        "PDF와 완료 파일이 동일 입고일 기준인지 확인 후 다시 시도해 주세요."
       ]);
       setStats({
         totalExcelRows: rows.length,
@@ -894,7 +1037,7 @@ async function handleParse() {
         fatalErrorCount: 1,
         unusedPdfCount: 0
       });
-      setStatus("검증 실패: 입고예정일 불일치");
+      setStatus("검증 실패: 입고일 불일치");
       return;
     }
 
@@ -1018,16 +1161,19 @@ copyBtn.addEventListener("click", handleCopy);
 
 ensureArrivalDateInput();
 updateInputAvailability();
+updateArrivalWarning();
 
-if (ui.arrivalInput) {
-  ui.arrivalInput.addEventListener("change", () => {
-    if (!ui.arrivalInput.value) {
+if (ui.arrivalTextInput) {
+  ui.arrivalTextInput.addEventListener("change", () => {
+    const normalized = normalizeDateInput(ui.arrivalTextInput.value);
+    if (!normalized) {
       pdfInput.value = "";
       excelInput.value = "";
       clearExcelState();
       resetOutput();
     }
     updateInputAvailability();
+    updateArrivalWarning();
   });
 }
 
