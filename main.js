@@ -14,9 +14,12 @@ const sheetSelect = document.getElementById("sheetSelect");
 const headerRowInput = document.getElementById("headerRowInput");
 const columnSelectField = document.getElementById("columnSelectField");
 const columnSelect = document.getElementById("columnSelect");
+const ctColumnSelectField = document.getElementById("ctColumnSelectField");
+const ctColumnSelect = document.getElementById("ctColumnSelect");
 
 const PDF_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-const HEADER_KEYWORDS = ["물류센터", "센터", "FC", "받는 사람", "수취인", "배송처", "납품처"];
+const FC_HEADER_KEYWORDS = ["물류센터", "센터", "FC", "받는 사람", "수취인", "배송처", "납품처"];
+const CT_HEADER_KEYWORDS = ["C/T NO", "C/T NO.", "CT NO", "CTNO", "CT NO.", "C/T", "CT", "C/TNO"];
 
 if (window.pdfjsLib) {
   window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER;
@@ -32,6 +35,12 @@ function normalizeFc(value) {
   text = text.replace(/\(\d+\)\s*$/g, "").trim();
   text = text.replace(/\s*FC\s*$/i, "").trim();
   return text;
+}
+
+function normalizeHeader(value) {
+  return normalizeWhitespace(String(value ?? ""))
+    .toLowerCase()
+    .replace(/[\s\.\-_/]/g, "");
 }
 
 function setStatus(message) {
@@ -60,6 +69,7 @@ const excelState = {
   selectedSheet: "",
   headerRowIndex: 0,
   headerColIndex: -1,
+  ctHeaderColIndex: -1,
   rows: []
 };
 
@@ -69,11 +79,14 @@ function clearExcelState() {
   excelState.selectedSheet = "";
   excelState.headerRowIndex = 0;
   excelState.headerColIndex = -1;
+  excelState.ctHeaderColIndex = -1;
   excelState.rows = [];
   sheetSelect.innerHTML = "";
   columnSelect.innerHTML = "";
+  ctColumnSelect.innerHTML = "";
   excelOptions.hidden = true;
   columnSelectField.hidden = true;
+  ctColumnSelectField.hidden = true;
 }
 
 function requireFiles() {
@@ -106,13 +119,13 @@ function getSheetRows(workbook, sheetName) {
   return window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
 }
 
-function detectHeaderColumnIndex(rows, headerRowIndex) {
+function detectHeaderColumnIndex(rows, headerRowIndex, keywords) {
   const headerRow = rows[headerRowIndex] || [];
   const matches = [];
   headerRow.forEach((cell, index) => {
-    const value = normalizeWhitespace(String(cell ?? ""));
+    const value = normalizeHeader(cell);
     if (!value) return;
-    if (HEADER_KEYWORDS.some((keyword) => value.toLowerCase().includes(keyword.toLowerCase()))) {
+    if (keywords.some((keyword) => value.includes(normalizeHeader(keyword)))) {
       matches.push(index);
     }
   });
@@ -133,47 +146,68 @@ function columnLabel(index) {
   return label;
 }
 
-function populateColumnSelect(rows, headerRowIndex) {
+function populateColumnSelect(selectEl, rows, headerRowIndex) {
   const headerRow = rows[headerRowIndex] || [];
-  columnSelect.innerHTML = "";
+  selectEl.innerHTML = "";
   headerRow.forEach((cell, index) => {
     const value = normalizeWhitespace(String(cell ?? ""));
     const option = document.createElement("option");
     option.value = String(index);
     option.textContent = `${columnLabel(index)}: ${value || "빈칸"}`;
-    columnSelect.appendChild(option);
+    selectEl.appendChild(option);
   });
 }
 
 function updateColumnSelection() {
   if (!excelState.rows.length) return;
   const headerRowIndex = excelState.headerRowIndex;
-  const detected = detectHeaderColumnIndex(excelState.rows, headerRowIndex);
-  populateColumnSelect(excelState.rows, headerRowIndex);
-  if (detected >= 0) {
-    excelState.headerColIndex = detected;
-    columnSelect.value = String(detected);
+  const detectedFc = detectHeaderColumnIndex(excelState.rows, headerRowIndex, FC_HEADER_KEYWORDS);
+  const detectedCt = detectHeaderColumnIndex(excelState.rows, headerRowIndex, CT_HEADER_KEYWORDS);
+  populateColumnSelect(columnSelect, excelState.rows, headerRowIndex);
+  populateColumnSelect(ctColumnSelect, excelState.rows, headerRowIndex);
+
+  if (detectedFc >= 0) {
+    excelState.headerColIndex = detectedFc;
+    columnSelect.value = String(detectedFc);
     columnSelectField.hidden = true;
   } else {
     excelState.headerColIndex = -1;
     columnSelectField.hidden = false;
   }
-}
 
+  if (detectedCt >= 0) {
+    excelState.ctHeaderColIndex = detectedCt;
+    ctColumnSelect.value = String(detectedCt);
+    ctColumnSelectField.hidden = true;
+  } else {
+    excelState.ctHeaderColIndex = -1;
+    ctColumnSelectField.hidden = false;
+  }
+}
 
 function extractFcFromLines(lines) {
   const indices = [];
+  const candidates = [];
   for (let i = 0; i < lines.length; i += 1) {
-    if (lines[i].includes("받는 사람:")) {
+    const line = lines[i];
+    if (!line.includes("받는 사람")) continue;
+    const match = line.match(/받는 사람\s*:\s*(.*)$/);
+    if (match) {
       indices.push(i);
+      const inline = normalizeFc(match[1] || "");
+      if (inline) {
+        candidates.push(inline);
+      } else {
+        const nextLine = lines[i + 1] ?? "";
+        const nextValue = normalizeFc(nextLine);
+        if (nextValue) candidates.push(nextValue);
+      }
     }
   }
   if (indices.length !== 1) {
     return { fc: null, count: indices.length };
   }
-  const idx = indices[0];
-  const nextLine = lines[idx + 1] ?? "";
-  const fc = normalizeFc(nextLine);
+  const fc = candidates[0] ?? "";
   return { fc: fc || null, count: indices.length };
 }
 
@@ -195,7 +229,7 @@ async function parsePdf(file) {
 function extractRecordsFromPdf(pages) {
   const issues = [];
   const records = [];
-  const mrbRegex = /MRB[0-9]+-[0-9]{3}/g;
+  const mrbRegex = /MR[A-Z0-9]*-[0-9]{3}/g;
 
   pages.forEach(({ pageNo, text }) => {
     const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
@@ -284,7 +318,9 @@ function updateRowsForSelectedSheet() {
   if (!excelState.workbook || !excelState.selectedSheet) {
     excelState.rows = [];
     excelState.headerColIndex = -1;
+    excelState.ctHeaderColIndex = -1;
     columnSelectField.hidden = true;
+    ctColumnSelectField.hidden = true;
     return;
   }
   excelState.rows = getSheetRows(excelState.workbook, excelState.selectedSheet);
@@ -293,64 +329,91 @@ function updateRowsForSelectedSheet() {
   updateColumnSelection();
 }
 
-function buildFcOrderFromState() {
-  if (!excelState.workbook) {
-    return { fcOrder: [], errors: ["엑셀 파일을 다시 선택해 주세요."] };
+function parseBoxNo(rawValue) {
+  if (rawValue === null || rawValue === undefined) return NaN;
+  if (typeof rawValue === "number") {
+    return Number.isFinite(rawValue) ? Math.trunc(rawValue) : NaN;
   }
-  if (!excelState.selectedSheet) {
-    return { fcOrder: [], errors: ["엑셀 시트를 선택해 주세요."] };
+  const text = String(rawValue).trim();
+  if (!text) return NaN;
+  const tailMatch = text.match(/(\d{1,3})\s*$/);
+  if (tailMatch) {
+    return Number.parseInt(tailMatch[1], 10);
   }
-  if (excelState.headerColIndex < 0) {
-    return { fcOrder: [], errors: ["물류센터 컬럼을 선택해 주세요."] };
+  const anyMatch = text.match(/(\d+)/g);
+  if (anyMatch && anyMatch.length) {
+    return Number.parseInt(anyMatch[anyMatch.length - 1], 10);
   }
-  if (!excelState.rows.length) {
-    return { fcOrder: [], errors: ["선택한 시트에서 데이터를 찾지 못했습니다."] };
-  }
-
-  const fcOrder = [];
-  const seen = new Set();
-  for (let r = excelState.headerRowIndex + 1; r < excelState.rows.length; r += 1) {
-    const raw = String((excelState.rows[r] || [])[excelState.headerColIndex] ?? "").trim();
-    if (!raw) continue;
-    const normalized = normalizeFc(raw);
-    if (!normalized) continue;
-    if (!seen.has(normalized)) {
-      seen.add(normalized);
-      fcOrder.push({ raw: normalizeWhitespace(raw), normalized });
-    }
-  }
-
-  return { fcOrder, errors: [] };
+  return NaN;
 }
 
-function buildOutput(fcOrder, records, showFc) {
+function buildRowOrderFromState() {
+  if (!excelState.workbook) {
+    return { rows: [], errors: ["엑셀 파일을 다시 선택해 주세요."] };
+  }
+  if (!excelState.selectedSheet) {
+    return { rows: [], errors: ["엑셀 시트를 선택해 주세요."] };
+  }
+  if (excelState.headerColIndex < 0) {
+    return { rows: [], errors: ["물류센터 컬럼을 선택해 주세요."] };
+  }
+  if (excelState.ctHeaderColIndex < 0) {
+    return { rows: [], errors: ["C/T NO. 컬럼을 선택해 주세요."] };
+  }
+  if (!excelState.rows.length) {
+    return { rows: [], errors: ["선택한 시트에서 데이터를 찾지 못했습니다."] };
+  }
+
+  const rows = [];
+  const seen = new Set();
+  for (let r = excelState.headerRowIndex + 1; r < excelState.rows.length; r += 1) {
+    const row = excelState.rows[r] || [];
+    const rawFc = String(row[excelState.headerColIndex] ?? "").trim();
+    const rawCt = row[excelState.ctHeaderColIndex];
+    if (!rawFc && (rawCt === null || rawCt === undefined || String(rawCt).trim() === "")) {
+      continue;
+    }
+    const normalized = normalizeFc(rawFc);
+    if (!normalized) continue;
+    const boxNo = parseBoxNo(rawCt);
+    if (!Number.isFinite(boxNo)) {
+      return {
+        rows: [],
+        errors: [`${r + 1}행: C/T NO. 값을 박스번호로 해석할 수 없습니다.`]
+      };
+    }
+    const key = `${normalized}:${boxNo}`;
+    if (seen.has(key)) {
+      return {
+        rows: [],
+        errors: [`${r + 1}행: 동일한 물류센터/박스번호 조합이 중복되었습니다.`]
+      };
+    }
+    seen.add(key);
+    rows.push({
+      rowIndex: r,
+      fcRaw: normalizeWhitespace(rawFc),
+      fcNormalized: normalized,
+      boxNo
+    });
+  }
+
+  return { rows, errors: [] };
+}
+
+function buildOutput(rows, records, showFc) {
   const errors = [];
-  const byFc = new Map();
+  const byKey = new Map();
 
   records.forEach((record) => {
-    const list = byFc.get(record.fc) ?? [];
-    list.push(record);
-    byFc.set(record.fc, list);
-  });
-
-  // 동일 FC에서 동일 boxNo 중복 방지
-  byFc.forEach((list, fc) => {
-    const seenBox = new Map();
-    list.forEach((record) => {
-      if (seenBox.has(record.boxNo)) {
-        const prev = seenBox.get(record.boxNo);
-        errors.push(
-          `FC ${fc}: 박스번호 ${record.boxNo}가 중복되었습니다. (페이지 ${prev.pageNo}, ${record.pageNo})`
-        );
-      } else {
-        seenBox.set(record.boxNo, record);
-      }
-    });
-  });
-
-  fcOrder.forEach((fc) => {
-    if (!byFc.has(fc.normalized)) {
-      errors.push(`엑셀에 있는 FC ${fc.raw}가 PDF에서 발견되지 않았습니다.`);
+    const key = `${record.fc}:${record.boxNo}`;
+    if (byKey.has(key)) {
+      const prev = byKey.get(key);
+      errors.push(
+        `FC ${record.fc}: 박스번호 ${record.boxNo}가 중복되었습니다. (페이지 ${prev.pageNo}, ${record.pageNo})`
+      );
+    } else {
+      byKey.set(key, record);
     }
   });
 
@@ -359,16 +422,24 @@ function buildOutput(fcOrder, records, showFc) {
   }
 
   const lines = [];
-  fcOrder.forEach((fc) => {
-    const list = byFc.get(fc.normalized) || [];
-    const sorted = [...list].sort((a, b) => a.boxNo - b.boxNo);
-    if (showFc) {
-      lines.push(`FC: ${fc.raw}`);
+  let lastFc = null;
+  rows.forEach((row) => {
+    const key = `${row.fcNormalized}:${row.boxNo}`;
+    const record = byKey.get(key);
+    if (!record) {
+      errors.push(`엑셀 ${row.rowIndex + 1}행: ${row.fcRaw} / 박스번호 ${row.boxNo}가 PDF에 없습니다.`);
+      return;
     }
-    sorted.forEach((record) => {
-      lines.push(record.mrb);
-    });
+    if (showFc && lastFc !== row.fcRaw) {
+      lines.push(`FC: ${row.fcRaw}`);
+      lastFc = row.fcRaw;
+    }
+    lines.push(record.mrb);
   });
+
+  if (errors.length) {
+    return { output: "", errors };
+  }
 
   return { output: lines.join("\n"), errors: [] };
 }
@@ -386,8 +457,8 @@ async function handleParse() {
 
   try {
     setStatus("파일을 분석 중입니다...");
-    const [{ fcOrder, errors }, pages] = await Promise.all([
-      Promise.resolve(buildFcOrderFromState()),
+    const [{ rows, errors }, pages] = await Promise.all([
+      Promise.resolve(buildRowOrderFromState()),
       parsePdf(pdfInput.files[0])
     ]);
     if (errors.length) {
@@ -395,8 +466,8 @@ async function handleParse() {
       setStatus("검증 실패: 엑셀 입력 오류");
       return;
     }
-    if (!fcOrder.length) {
-      showErrors(["엑셀에서 물류센터 목록을 찾지 못했습니다."]);
+    if (!rows.length) {
+      showErrors(["엑셀에서 물류센터/C/T NO. 목록을 찾지 못했습니다."]);
       setStatus("검증 실패: 엑셀 입력 오류");
       return;
     }
@@ -408,7 +479,7 @@ async function handleParse() {
       return;
     }
 
-    const { output, errors } = buildOutput(fcOrder, records, showFcToggle.checked);
+    const { output, errors } = buildOutput(rows, records, showFcToggle.checked);
     if (errors.length) {
       showErrors(errors);
       setStatus("검증 실패: FC/박스번호 오류가 있습니다.");
@@ -449,15 +520,15 @@ excelInput.addEventListener("change", async () => {
     setStatus("엑셀 파일을 읽는 중입니다...");
     const workbook = await loadWorkbookFromFile(excelInput.files[0]);
     initializeExcelState(workbook);
-    if (!excelState.selectedSheet) {
-      setStatus("엑셀 시트를 선택해 주세요.");
-      return;
-    }
-    if (excelState.headerColIndex < 0) {
-      setStatus("물류센터 컬럼을 선택해 주세요.");
-      return;
-    }
-    setStatus("엑셀 시트와 헤더 정보를 확인해 주세요.");
+  if (!excelState.selectedSheet) {
+    setStatus("엑셀 시트를 선택해 주세요.");
+    return;
+  }
+  if (excelState.headerColIndex < 0 || excelState.ctHeaderColIndex < 0) {
+    setStatus("물류센터/C/T NO. 컬럼을 선택해 주세요.");
+    return;
+  }
+  setStatus("엑셀 시트와 헤더 정보를 확인해 주세요.");
   } catch (err) {
     clearExcelState();
     showErrors([err instanceof Error ? err.message : "엑셀 파일을 읽는 중 오류가 발생했습니다."]);
@@ -471,21 +542,28 @@ sheetSelect.addEventListener("change", () => {
     setStatus("엑셀 시트를 선택해 주세요.");
     return;
   }
-  if (excelState.headerColIndex < 0) {
-    setStatus("물류센터 컬럼을 선택해 주세요.");
+  if (excelState.headerColIndex < 0 || excelState.ctHeaderColIndex < 0) {
+    setStatus("물류센터/C/T NO. 컬럼을 선택해 주세요.");
   }
 });
 
 headerRowInput.addEventListener("change", () => {
   updateRowsForSelectedSheet();
-  if (excelState.headerColIndex < 0) {
-    setStatus("물류센터 컬럼을 선택해 주세요.");
+  if (excelState.headerColIndex < 0 || excelState.ctHeaderColIndex < 0) {
+    setStatus("물류센터/C/T NO. 컬럼을 선택해 주세요.");
   }
 });
 
 columnSelect.addEventListener("change", () => {
   excelState.headerColIndex = Number.parseInt(columnSelect.value, 10);
   if (excelState.headerColIndex >= 0) {
+    setStatus("엑셀 시트와 헤더 정보를 확인해 주세요.");
+  }
+});
+
+ctColumnSelect.addEventListener("change", () => {
+  excelState.ctHeaderColIndex = Number.parseInt(ctColumnSelect.value, 10);
+  if (excelState.ctHeaderColIndex >= 0) {
     setStatus("엑셀 시트와 헤더 정보를 확인해 주세요.");
   }
 });
