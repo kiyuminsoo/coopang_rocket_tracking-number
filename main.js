@@ -283,11 +283,22 @@ function buildRowOrderFromState() {
     return { rows: [], errors: ["<패킹> 시트에서 데이터를 찾지 못했습니다."] };
   }
 
-  const headerRowIndex = 0;
-  const headerColIndex = detectHeaderColumnIndex(rows, headerRowIndex, FC_HEADER_KEYWORDS);
-  const ctHeaderColIndex = detectHeaderColumnIndex(rows, headerRowIndex, CT_HEADER_KEYWORDS);
+  let headerRowIndex = -1;
+  let headerColIndex = -1;
+  let ctHeaderColIndex = -1;
+  const scanLimit = Math.min(rows.length, 10);
+  for (let i = 0; i < scanLimit; i += 1) {
+    const fcIdx = detectHeaderColumnIndex(rows, i, FC_HEADER_KEYWORDS);
+    const ctIdx = detectHeaderColumnIndex(rows, i, CT_HEADER_KEYWORDS);
+    if (fcIdx >= 0 && ctIdx >= 0) {
+      headerRowIndex = i;
+      headerColIndex = fcIdx;
+      ctHeaderColIndex = ctIdx;
+      break;
+    }
+  }
 
-  if (headerColIndex < 0) {
+  if (headerRowIndex < 0 || headerColIndex < 0) {
     return { rows: [], errors: ["<패킹> 시트에서 물류센터 컬럼을 찾지 못했습니다."] };
   }
   if (ctHeaderColIndex < 0) {
@@ -322,7 +333,6 @@ function buildRowOrderFromState() {
 }
 
 function buildOutput(rows, records) {
-  const errors = [];
   const byKey = new Map();
 
   records.forEach((record) => {
@@ -336,16 +346,8 @@ function buildOutput(rows, records) {
   rows.forEach((row) => {
     const key = `${row.fcNormalized}:${row.boxNo}`;
     const record = byKey.get(key);
-    if (!record) {
-      errors.push(`엑셀 ${row.rowIndex + 1}행: ${row.fcRaw} / 박스번호 ${row.boxNo}가 PDF에 없습니다.`);
-      return;
-    }
-    lines.push(record.mrb);
+    lines.push(record ? record.mrb : "");
   });
-
-  if (errors.length) {
-    return { output: "", errors };
-  }
 
   return { output: lines.join("\n"), errors: [] };
 }
@@ -397,12 +399,7 @@ async function handleParse() {
       return;
     }
 
-    const { output, errors: outputErrors } = buildOutput(rows, records);
-    if (outputErrors.length) {
-      showErrors(outputErrors);
-      setStatus("검증 실패: FC/박스번호 오류가 있습니다.");
-      return;
-    }
+    const { output } = buildOutput(rows, records);
 
     resultText.value = output;
     resultSection.hidden = false;
