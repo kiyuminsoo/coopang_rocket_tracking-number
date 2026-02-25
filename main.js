@@ -112,7 +112,10 @@ function detectHeaderColumnIndex(rows, headerRowIndex, keywords) {
 }
 
 function normalizeComparable(value) {
-  return normalizeWhitespace(String(value ?? "")).replace(/\s+/g, "");
+  return normalizeWhitespace(String(value ?? ""))
+    .toLowerCase()
+    .replace(/fc/g, "")
+    .replace(/[^a-z0-9가-힣]/gi, "");
 }
 
 function extractFcFromLines(lines, fcCandidates) {
@@ -120,19 +123,23 @@ function extractFcFromLines(lines, fcCandidates) {
   const candidates = [];
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
-    if (!line.includes("받는 사람")) continue;
-    const match = line.match(/받는 사람\s*:\s*(.*)$/);
-    if (match) {
-      indices.push(i);
-      const inline = normalizeFc(match[1] || "");
-      if (inline) {
-        candidates.push(inline);
-      } else {
-        const nextLine = lines[i + 1] ?? "";
-        const nextValue = normalizeFc(nextLine);
-        if (nextValue) candidates.push(nextValue);
-      }
+    const normalizedLine = normalizeComparable(line);
+    if (!normalizedLine.includes("받는사람")) continue;
+    indices.push(i);
+    const inlineMatch = line.match(/받는\s*사람\s*[:：]?\s*(.*)$/);
+    const inlineValue = inlineMatch ? normalizeFc(inlineMatch[1] || "") : "";
+    if (inlineValue) {
+      candidates.push(inlineValue);
+      continue;
     }
+    let nextValue = "";
+    for (let j = i + 1; j < lines.length; j += 1) {
+      const nextLine = lines[j];
+      if (!nextLine) continue;
+      nextValue = normalizeFc(nextLine);
+      if (nextValue) break;
+    }
+    if (nextValue) candidates.push(nextValue);
   }
   if (indices.length !== 1) {
     // fallback: try to match FC names from 엑셀 목록
