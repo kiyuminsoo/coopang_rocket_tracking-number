@@ -369,7 +369,8 @@ const ui = {
   unusedList: null,
   copyVerifyBtn: null,
   resultLabel: null,
-  arrivalInput: null
+  arrivalInput: null,
+  arrivalHint: null
 };
 
 function ensureStatsSection() {
@@ -390,7 +391,7 @@ function ensureStatsSection() {
     { key: "totalExcelRows", label: "엑셀 대상 행 수" },
     { key: "totalPdfRecords", label: "PDF 페이지/레코드 수" },
     { key: "matchedCount", label: "매칭 성공" },
-    { key: "skippedCount", label: "PLT 출고 스킵" },
+    { key: "skippedCount", label: "PLT 출고(밀크런 송장 미발행)로 제외" },
     { key: "fatalErrorCount", label: "치명적 오류" },
     { key: "unusedPdfCount", label: "PDF 미사용 MRB" }
   ];
@@ -714,36 +715,83 @@ function ensureArrivalDateInput() {
   const field = document.createElement("label");
   field.className = "field";
   const label = document.createElement("span");
-  label.textContent = "입고예정일";
+  label.textContent = "입고예정일자 (필수)";
   const input = document.createElement("input");
   input.type = "date";
   input.id = "arrivalDate";
+  const hint = document.createElement("small");
+  hint.textContent = "입고예정일자를 먼저 선택한 후 PDF/엑셀 파일을 업로드하세요.";
+  hint.style.display = "block";
+  hint.style.marginTop = "6px";
+  hint.style.color = "#555";
   field.appendChild(label);
   field.appendChild(input);
-  const excelField = excelInput.closest(".field");
-  if (excelField && excelField.parentNode) {
-    excelField.parentNode.insertBefore(field, excelField.nextSibling);
+  field.appendChild(hint);
+  const pdfField = pdfInput.closest(".field");
+  if (pdfField && pdfField.parentNode) {
+    pdfField.parentNode.insertBefore(field, pdfField);
   } else {
     inputCard.appendChild(field);
   }
   ui.arrivalInput = input;
+  ui.arrivalHint = hint;
 }
 
-function extractArrivalDateCandidates(pages) {
-  const candidates = new Set();
+function extractArrivalDateDetails(pages) {
+  const dateToPages = new Map();
   const regex = /입고예정일자[:：]?(\d{4}[./-]\d{2}[./-]\d{2})/g;
-  pages.forEach(({ text }) => {
+  pages.forEach(({ text, pageNo }) => {
     const compact = String(text || "").replace(/\s+/g, "");
     let match;
     while ((match = regex.exec(compact)) !== null) {
       const raw = match[1];
       const normalized = raw.replace(/[./]/g, "-");
-      if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
-        candidates.add(normalized);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) continue;
+      if (!dateToPages.has(normalized)) {
+        dateToPages.set(normalized, new Set());
       }
+      dateToPages.get(normalized).add(pageNo);
     }
   });
-  return candidates;
+  return { dateToPages, dates: new Set(dateToPages.keys()) };
+}
+
+function formatPageRanges(pages) {
+  const sorted = Array.from(pages).sort((a, b) => a - b);
+  if (!sorted.length) return "-";
+  const ranges = [];
+  let start = sorted[0];
+  let prev = sorted[0];
+  for (let i = 1; i < sorted.length; i += 1) {
+    const current = sorted[i];
+    if (current === prev + 1) {
+      prev = current;
+      continue;
+    }
+    if (start === prev) {
+      ranges.push(`${start}페이지`);
+    } else {
+      ranges.push(`${start}-${prev}페이지`);
+    }
+    start = current;
+    prev = current;
+  }
+  if (start === prev) {
+    ranges.push(`${start}페이지`);
+  } else {
+    ranges.push(`${start}-${prev}페이지`);
+  }
+  return ranges.join(", ");
+}
+
+function updateInputAvailability() {
+  const hasDate = !!(ui.arrivalInput && ui.arrivalInput.value);
+  pdfInput.disabled = !hasDate;
+  excelInput.disabled = !hasDate;
+  const hasFiles = !!(pdfInput.files?.length && excelInput.files?.length);
+  parseBtn.disabled = !(hasDate && hasFiles);
+  copyBtn.disabled = true;
+  if (ui.copyVerifyBtn) ui.copyVerifyBtn.disabled = true;
 }
 
 async function handleParse() {
@@ -752,7 +800,14 @@ async function handleParse() {
   resetOutput();
   ensureCopyButtons();
   ensureArrivalDateInput();
+  updateInputAvailability();
 
+  const selectedArrivalDate = ui.arrivalInput ? ui.arrivalInput.value : "";
+  if (!selectedArrivalDate) {
+    showErrors(["입고예정일자를 선택해야 분석할 수 있습니다."]);
+    setStatus("검증 실패: 입고예정일자 미선택");
+    return;
+  }
   if (!requireFiles()) return;
   if (!window.pdfjsLib || !window.XLSX) {
     showErrors(["필요한 라이브러리를 불러오지 못했습니다. 새로고침 후 다시 시도해 주세요."]);
@@ -804,40 +859,43 @@ async function handleParse() {
       return;
     }
 
-    const selectedArrivalDate = ui.arrivalInput ? ui.arrivalInput.value : "";
-    if (selectedArrivalDate) {
-      const candidates = extractArrivalDateCandidates(pages);
-      if (candidates.size === 0) {
-        showErrors(["PDF에서 입고예정일자를 찾지 못했습니다."]);
-        setStats({
-          totalExcelRows: rows.length,
-          totalPdfPages: pages.length,
-          totalPdfRecords: 0,
-          matchedCount: 0,
-          skippedCount: 0,
-          fatalErrorCount: 1,
-          unusedPdfCount: 0
-        });
-        setStatus("검증 실패: 입고예정일자 확인");
-        return;
-      }
-      if (!candidates.has(selectedArrivalDate)) {
-        const preview = Array.from(candidates).slice(0, 5);
-        const message = `입고예정일 불일치: 선택한 날짜(${selectedArrivalDate})`;
-        const detail = `PDF 후보: ${preview.join(", ")}${candidates.size > 5 ? ` 외 ${candidates.size - 5}건` : ""}`;
-        showErrors([message, detail]);
-        setStats({
-          totalExcelRows: rows.length,
-          totalPdfPages: pages.length,
-          totalPdfRecords: 0,
-          matchedCount: 0,
-          skippedCount: 0,
-          fatalErrorCount: 1,
-          unusedPdfCount: 0
-        });
-        setStatus("검증 실패: 입고예정일 불일치");
-        return;
-      }
+    const { dateToPages, dates } = extractArrivalDateDetails(pages);
+    if (dates.size === 0) {
+      showErrors(["PDF에서 입고예정일자를 찾지 못했습니다. 올바른 밀크런 운송장 PDF인지 확인하세요."]);
+      setStats({
+        totalExcelRows: rows.length,
+        totalPdfPages: pages.length,
+        totalPdfRecords: 0,
+        matchedCount: 0,
+        skippedCount: 0,
+        fatalErrorCount: 1,
+        unusedPdfCount: 0
+      });
+      setStatus("검증 실패: 입고예정일자 확인");
+      return;
+    }
+    const hasMismatch = dates.size > 1 || !dates.has(selectedArrivalDate);
+    if (hasMismatch) {
+      const summary = Array.from(dateToPages.entries()).map(([date, pagesSet]) => {
+        const pageInfo = formatPageRanges(pagesSet);
+        return `PDF 날짜 ${date}: ${pageInfo}`;
+      });
+      showErrors([
+        "입고예정일 불일치로 분석 중단",
+        `선택한 날짜: ${selectedArrivalDate}`,
+        ...summary
+      ]);
+      setStats({
+        totalExcelRows: rows.length,
+        totalPdfPages: pages.length,
+        totalPdfRecords: 0,
+        matchedCount: 0,
+        skippedCount: 0,
+        fatalErrorCount: 1,
+        unusedPdfCount: 0
+      });
+      setStatus("검증 실패: 입고예정일 불일치");
+      return;
     }
 
     const { map: pdfMap, issues: pdfIssues } = extractPdfMap(pages);
@@ -958,10 +1016,26 @@ async function handleVerifyCopy() {
 parseBtn.addEventListener("click", handleParse);
 copyBtn.addEventListener("click", handleCopy);
 
+ensureArrivalDateInput();
+updateInputAvailability();
+
+if (ui.arrivalInput) {
+  ui.arrivalInput.addEventListener("change", () => {
+    if (!ui.arrivalInput.value) {
+      pdfInput.value = "";
+      excelInput.value = "";
+      clearExcelState();
+      resetOutput();
+    }
+    updateInputAvailability();
+  });
+}
+
 excelInput.addEventListener("change", async () => {
   resetOutput();
   showErrors([]);
   showWarnings([]);
+  updateInputAvailability();
   if (!excelInput.files?.length) {
     clearExcelState();
     return;
@@ -979,4 +1053,11 @@ excelInput.addEventListener("change", async () => {
     clearExcelState();
     showErrors([err instanceof Error ? err.message : "엑셀 파일을 읽는 중 오류가 발생했습니다."]);
   }
+});
+
+pdfInput.addEventListener("change", () => {
+  resetOutput();
+  showErrors([]);
+  showWarnings([]);
+  updateInputAvailability();
 });
