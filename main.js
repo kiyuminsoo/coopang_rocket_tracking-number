@@ -111,7 +111,11 @@ function detectHeaderColumnIndex(rows, headerRowIndex, keywords) {
   return -1;
 }
 
-function extractFcFromLines(lines) {
+function normalizeComparable(value) {
+  return normalizeWhitespace(String(value ?? "")).replace(/\s+/g, "");
+}
+
+function extractFcFromLines(lines, fcCandidates) {
   const indices = [];
   const candidates = [];
   for (let i = 0; i < lines.length; i += 1) {
@@ -131,6 +135,21 @@ function extractFcFromLines(lines) {
     }
   }
   if (indices.length !== 1) {
+    // fallback: try to match FC names from 엑셀 목록
+    if (fcCandidates && fcCandidates.length) {
+      const found = new Set();
+      lines.forEach((line) => {
+        const normalizedLine = normalizeComparable(line);
+        fcCandidates.forEach((candidate) => {
+          if (normalizedLine.includes(candidate.key)) {
+            found.add(candidate.normalized);
+          }
+        });
+      });
+      if (found.size === 1) {
+        return { fc: Array.from(found)[0], count: 1 };
+      }
+    }
     return { fc: null, count: indices.length };
   }
   const fc = candidates[0] ?? "";
@@ -152,14 +171,14 @@ async function parsePdf(file) {
   return pages;
 }
 
-function extractRecordsFromPdf(pages) {
+function extractRecordsFromPdf(pages, fcCandidates) {
   const issues = [];
   const records = [];
   const mrbRegex = /MR[A-Z0-9]*-[0-9]{3}/g;
 
   pages.forEach(({ pageNo, text }) => {
     const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
-    const fcInfo = extractFcFromLines(lines);
+    const fcInfo = extractFcFromLines(lines, fcCandidates);
     const mrbMatches = text.match(mrbRegex) ?? [];
 
     if (fcInfo.count !== 1) {
@@ -352,7 +371,19 @@ async function handleParse() {
       return;
     }
 
-    const { records, issues } = extractRecordsFromPdf(pages);
+    const fcCandidates = Array.from(
+      rows.reduce((map, row) => {
+        if (!map.has(row.fcNormalized)) {
+          map.set(row.fcNormalized, {
+            normalized: row.fcNormalized,
+            key: normalizeComparable(row.fcNormalized)
+          });
+        }
+        return map;
+      }, new Map()).values()
+    );
+
+    const { records, issues } = extractRecordsFromPdf(pages, fcCandidates);
     if (issues.length) {
       showErrors(issues);
       setStatus("검증 실패: PDF에서 문제가 발견되었습니다.");
