@@ -178,15 +178,19 @@ async function parsePdf(file) {
   return pages;
 }
 
+function normalizeMrb(value) {
+  return String(value ?? "").replace(/\s+/g, "");
+}
+
 function extractRecordsFromPdf(pages, fcCandidates) {
   const issues = [];
   const records = [];
-  const mrbRegex = /MR[A-Z0-9]*-[0-9]{3}/g;
+  const mrbRegex = /MR[A-Z0-9\s]{0,20}-\s*[0-9]{3}/g;
 
   pages.forEach(({ pageNo, text }) => {
     const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
     const fcInfo = extractFcFromLines(lines, fcCandidates);
-    const mrbMatches = text.match(mrbRegex) ?? [];
+    const mrbMatches = (text.match(mrbRegex) ?? []).map(normalizeMrb);
 
     if (fcInfo.count !== 1) {
       issues.push(`페이지 ${pageNo}: FC는 페이지당 1개여야 합니다. (검출: ${fcInfo.count}개)`);
@@ -343,13 +347,27 @@ function buildOutput(rows, records) {
   });
 
   const lines = [];
+  let matchCount = 0;
   rows.forEach((row) => {
     const key = `${row.fcNormalized}:${row.boxNo}`;
     const record = byKey.get(key);
-    lines.push(record ? record.mrb : "");
+    if (record) {
+      matchCount += 1;
+      lines.push(record.mrb);
+    } else {
+      lines.push("");
+    }
   });
 
-  return { output: lines.join("\n"), errors: [] };
+  const sampleExcelKeys = rows.slice(0, 3).map((row) => `${row.fcNormalized}:${row.boxNo}`);
+  const samplePdfKeys = Array.from(byKey.keys()).slice(0, 3);
+
+  return {
+    output: lines.join("\n"),
+    matchCount,
+    sampleExcelKeys,
+    samplePdfKeys
+  };
 }
 
 async function handleParse() {
@@ -399,12 +417,26 @@ async function handleParse() {
       return;
     }
 
-    const { output } = buildOutput(rows, records);
+    const { output, matchCount, sampleExcelKeys, samplePdfKeys } = buildOutput(rows, records);
+    if (records.length === 0) {
+      showErrors(["PDF에서 운송장 번호를 찾지 못했습니다. PDF 형식을 확인해 주세요."]);
+      setStatus("검증 실패: PDF 인식 오류");
+      return;
+    }
+    if (matchCount === 0) {
+      showErrors([
+        "엑셀과 PDF가 매칭되지 않았습니다.",
+        `엑셀 예시 키: ${sampleExcelKeys.join(", ") || "없음"}`,
+        `PDF 예시 키: ${samplePdfKeys.join(", ") || "없음"}`
+      ]);
+      setStatus("검증 실패: 매칭 오류");
+      return;
+    }
 
     resultText.value = output;
     resultSection.hidden = false;
     copyBtn.disabled = !output;
-    setStatus("완료되었습니다. 복사 버튼으로 결과를 복사하세요.");
+    setStatus(`완료되었습니다. 매칭 ${matchCount}건`);
   } catch (err) {
     showErrors([err instanceof Error ? err.message : "처리 중 오류가 발생했습니다."]);
     setStatus("검증 실패: 입력을 확인해 주세요.");
