@@ -6,6 +6,7 @@ const parseBtn = document.getElementById("parseBtn");
 const copyBtn = document.getElementById("copyBtn");
 const statusEl = document.getElementById("status");
 const errorBox = document.getElementById("errorBox");
+let warningBox = document.getElementById("warningBox");
 const resultSection = document.getElementById("resultSection");
 const resultText = document.getElementById("resultText");
 
@@ -45,6 +46,36 @@ function showErrors(messages) {
   }
   errorBox.hidden = false;
   errorBox.innerHTML = messages.map((msg) => `• ${msg}`).join("<br>");
+}
+
+function ensureWarningBox() {
+  if (warningBox) return;
+  warningBox = document.createElement("div");
+  warningBox.id = "warningBox";
+  warningBox.style.marginTop = "8px";
+  warningBox.style.padding = "10px 12px";
+  warningBox.style.borderRadius = "6px";
+  warningBox.style.background = "#fff4cc";
+  warningBox.style.border = "1px solid #f1c232";
+  warningBox.style.color = "#7f6000";
+  warningBox.style.fontSize = "14px";
+  warningBox.hidden = true;
+  if (errorBox && errorBox.parentNode) {
+    errorBox.parentNode.insertBefore(warningBox, errorBox.nextSibling);
+  } else {
+    document.body.appendChild(warningBox);
+  }
+}
+
+function showWarnings(messages) {
+  ensureWarningBox();
+  if (!messages.length) {
+    warningBox.hidden = true;
+    warningBox.innerHTML = "";
+    return;
+  }
+  warningBox.hidden = false;
+  warningBox.innerHTML = messages.map((msg) => `• ${msg}`).join("<br>");
 }
 
 function resetOutput() {
@@ -274,6 +305,7 @@ function buildRowOrderFromState() {
 function buildOutput(rows, pdfMap) {
   const lines = [];
   const issues = [];
+  const skips = [];
 
   rows.forEach((row) => {
     const displayRow = row.rowIndex + 1;
@@ -288,19 +320,22 @@ function buildOutput(rows, pdfMap) {
     const key = `${row.fcNormalized}|${row.ct}`;
     const mrb = pdfMap.get(key);
     if (!mrb) {
-      issues.push(
-        `행 ${displayRow}: PDF 매칭 실패 (센터: ${row.fcRaw || "-"}, CT: ${row.ct})`
-      );
+      skips.push({
+        rowNo: displayRow,
+        fcRaw: row.fcRaw || "-",
+        ct: row.ct
+      });
       return;
     }
     lines.push(mrb);
   });
 
-  return { outputLines: lines, issues };
+  return { outputLines: lines, issues, skips };
 }
 
 async function handleParse() {
   showErrors([]);
+  showWarnings([]);
   resetOutput();
 
   if (!requireFiles()) return;
@@ -339,17 +374,38 @@ async function handleParse() {
       return;
     }
 
-    const { outputLines, issues: outputIssues } = buildOutput(rows, pdfMap);
+    const { outputLines, issues: outputIssues, skips } = buildOutput(rows, pdfMap);
     if (outputIssues.length) {
       showErrors(outputIssues);
       setStatus("검증 실패: 엑셀/PDF 매칭 오류");
       return;
     }
 
+    if (skips.length) {
+      const preview = skips.slice(0, 20).map((item) => {
+        return `행 ${item.rowNo}: ${item.fcRaw}, CT ${item.ct}`;
+      });
+      const extra = skips.length > 20 ? `외 ${skips.length - 20}건` : "";
+      const warningMessages = [
+        `PDF에 없어 건너뜀: ${skips.length}건`,
+        ...preview,
+        ...(extra ? [extra] : [])
+      ];
+      showWarnings(warningMessages);
+    }
+
+    if (outputLines.length === 0) {
+      resultText.value = "";
+      resultSection.hidden = true;
+      copyBtn.disabled = true;
+      setStatus("출력할 MRB가 없습니다(PDF에 해당 센터/CT 없음).");
+      return;
+    }
+
     const output = outputLines.join("\n");
     resultText.value = output;
     resultSection.hidden = false;
-    copyBtn.disabled = !output;
+    copyBtn.disabled = false;
     setStatus(`완료되었습니다. 매칭 ${outputLines.length}건`);
   } catch (err) {
     showErrors([err instanceof Error ? err.message : "처리 중 오류가 발생했습니다."]);
@@ -369,6 +425,7 @@ copyBtn.addEventListener("click", handleCopy);
 excelInput.addEventListener("change", async () => {
   resetOutput();
   showErrors([]);
+  showWarnings([]);
   if (!excelInput.files?.length) {
     clearExcelState();
     return;
