@@ -10,8 +10,8 @@ const resultSection = document.getElementById("resultSection");
 const resultText = document.getElementById("resultText");
 
 const PDF_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-const FC_HEADER_KEYWORDS = ["물류센터", "센터", "FC", "받는 사람", "수취인", "배송처", "납품처"];
-const CT_HEADER_KEYWORDS = ["C/T NO", "C/T NO.", "CT NO", "CTNO", "CT NO.", "C/T", "CT", "C/TNO"];
+const PACKING_FC_COL_INDEX = 2; // C열
+const PACKING_CT_COL_INDEX = 4; // E열
 
 if (window.pdfjsLib) {
   window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER;
@@ -22,17 +22,15 @@ function normalizeWhitespace(value) {
 }
 
 function normalizeFc(value) {
-  let text = normalizeWhitespace(String(value ?? ""));
+  let text = String(value ?? "");
   if (!text) return "";
-  text = text.replace(/\(\d+\)\s*$/g, "").trim();
-  text = text.replace(/\s*FC\s*$/i, "").trim();
-  return text;
-}
-
-function normalizeHeader(value) {
-  return normalizeWhitespace(String(value ?? ""))
-    .toLowerCase()
-    .replace(/[\s\.\-_/]/g, "");
+  text = text.replace(/\s+/g, "");
+  text = text.replace(/대표번호.*$/g, "");
+  const match = text.match(/^(.*?FC)/);
+  if (match) text = match[1];
+  text = text.replace(/\(\d+\)FC$/g, "");
+  text = text.replace(/FC$/g, "");
+  return text.trim();
 }
 
 function setStatus(message) {
@@ -95,72 +93,55 @@ function getSheetRows(workbook, sheetName) {
   return window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
 }
 
-function detectHeaderColumnIndex(rows, headerRowIndex, keywords) {
-  const headerRow = rows[headerRowIndex] || [];
-  const matches = [];
-  headerRow.forEach((cell, index) => {
-    const value = normalizeHeader(cell);
-    if (!value) return;
-    if (keywords.some((keyword) => value.includes(normalizeHeader(keyword)))) {
-      matches.push(index);
+function extractFcFromItems(items) {
+  const tokens = items
+    .map((item) => String(item?.str ?? "").trim())
+    .filter((text) => text !== "")
+    .map((text) => ({
+      raw: text,
+      normalized: text.replace(/\s+/g, "").replace(/[：:]/g, "")
+    }));
+
+  let count = 0;
+  let fc = "";
+
+  const readNextValue = (startIndex) => {
+    for (let i = startIndex + 1; i < tokens.length; i += 1) {
+      if (tokens[i].raw) return tokens[i].raw;
     }
-  });
-  if (matches.length === 1) {
-    return matches[0];
-  }
-  return -1;
-}
+    return "";
+  };
 
-function normalizeComparable(value) {
-  return normalizeWhitespace(String(value ?? ""))
-    .toLowerCase()
-    .replace(/fc/g, "")
-    .replace(/[^a-z0-9가-힣]/gi, "");
-}
+  const readInlineValue = (text) => {
+    const match = text.match(/받는\s*사람\s*[:：]?\s*(.*)$/);
+    return match ? match[1].trim() : "";
+  };
 
-function extractFcFromLines(lines, fcCandidates) {
-  const indices = [];
-  const candidates = [];
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    const normalizedLine = normalizeComparable(line);
-    if (!normalizedLine.includes("받는사람")) continue;
-    indices.push(i);
-    const inlineMatch = line.match(/받는\s*사람\s*[:：]?\s*(.*)$/);
-    const inlineValue = inlineMatch ? normalizeFc(inlineMatch[1] || "") : "";
-    if (inlineValue) {
-      candidates.push(inlineValue);
+  for (let i = 0; i < tokens.length; i += 1) {
+    const current = tokens[i];
+    const normalized = current.normalized;
+
+    if (normalized.startsWith("받는사람")) {
+      count += 1;
+      const inline = readInlineValue(current.raw);
+      const candidate = inline || readNextValue(i);
+      if (count === 1) fc = normalizeFc(candidate);
       continue;
     }
-    let nextValue = "";
-    for (let j = i + 1; j < lines.length; j += 1) {
-      const nextLine = lines[j];
-      if (!nextLine) continue;
-      nextValue = normalizeFc(nextLine);
-      if (nextValue) break;
-    }
-    if (nextValue) candidates.push(nextValue);
-  }
-  if (indices.length !== 1) {
-    // fallback: try to match FC names from 엑셀 목록
-    if (fcCandidates && fcCandidates.length) {
-      const found = new Set();
-      lines.forEach((line) => {
-        const normalizedLine = normalizeComparable(line);
-        fcCandidates.forEach((candidate) => {
-          if (normalizedLine.includes(candidate.key)) {
-            found.add(candidate.normalized);
-          }
-        });
-      });
-      if (found.size === 1) {
-        return { fc: Array.from(found)[0], count: 1 };
+
+    if (normalized === "받는" && tokens[i + 1]) {
+      const next = tokens[i + 1];
+      if (next.normalized.startsWith("사람")) {
+        count += 1;
+        const inline = readInlineValue(`${current.raw} ${next.raw}`);
+        const candidate = inline || readNextValue(i + 1);
+        if (count === 1) fc = normalizeFc(candidate);
+        i += 1;
       }
     }
-    return { fc: null, count: indices.length };
   }
-  const fc = candidates[0] ?? "";
-  return { fc: fc || null, count: indices.length };
+
+  return { fc: fc || null, count };
 }
 
 async function parsePdf(file) {
@@ -172,25 +153,20 @@ async function parsePdf(file) {
     const page = await doc.getPage(i);
     const content = await page.getTextContent();
     const pageText = buildLinesFromTextItems(content.items);
-    pages.push({ pageNo: i, text: pageText });
+    pages.push({ pageNo: i, text: pageText, items: content.items });
   }
 
   return pages;
 }
 
-function normalizeMrb(value) {
-  return String(value ?? "").replace(/\s+/g, "");
-}
-
-function extractRecordsFromPdf(pages, fcCandidates) {
+function extractPdfMap(pages) {
   const issues = [];
-  const records = [];
-  const mrbRegex = /MR[A-Z0-9\s]{0,20}-\s*[0-9]{3}/g;
+  const map = new Map();
+  const mrbRegex = /MRB\d+-\d{3}/g;
 
-  pages.forEach(({ pageNo, text }) => {
-    const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
-    const fcInfo = extractFcFromLines(lines, fcCandidates);
-    const mrbMatches = (text.match(mrbRegex) ?? []).map(normalizeMrb);
+  pages.forEach(({ pageNo, text, items }) => {
+    const fcInfo = extractFcFromItems(items || []);
+    const mrbMatches = (text.replace(/\s+/g, "").match(mrbRegex) ?? []);
 
     if (fcInfo.count !== 1) {
       issues.push(`페이지 ${pageNo}: FC는 페이지당 1개여야 합니다. (검출: ${fcInfo.count}개)`);
@@ -210,23 +186,29 @@ function extractRecordsFromPdf(pages, fcCandidates) {
     }
 
     const mrb = mrbMatches[0];
-    const boxNoRaw = mrb.split("-").pop();
-    const boxNo = boxNoRaw ? Number.parseInt(boxNoRaw, 10) : NaN;
+    const ctRaw = mrb.split("-").pop();
+    const ct = ctRaw ? Number.parseInt(ctRaw, 10) : NaN;
 
-    if (!Number.isFinite(boxNo)) {
-      issues.push(`페이지 ${pageNo}: MRB 박스 번호를 해석할 수 없습니다.`);
+    if (!Number.isFinite(ct)) {
+      issues.push(`페이지 ${pageNo}: MRB CT 번호를 해석할 수 없습니다.`);
       return;
     }
 
-    records.push({
-      pageNo,
-      fc: fcInfo.fc,
-      mrb,
-      boxNo
-    });
+    const key = `${normalizeFc(fcInfo.fc)}|${ct}`;
+    if (!key || key.startsWith("|")) {
+      issues.push(`페이지 ${pageNo}: FC를 해석할 수 없습니다.`);
+      return;
+    }
+
+    if (map.has(key)) {
+      issues.push(`페이지 ${pageNo}: PDF에서 중복된 FC/CT (${key})가 발견되었습니다.`);
+      return;
+    }
+
+    map.set(key, mrb);
   });
 
-  return { records, issues };
+  return { map, issues };
 }
 
 function loadWorkbookFromFile(file) {
@@ -251,22 +233,16 @@ function initializeExcelState(workbook) {
   excelState.sheetNames = workbook.SheetNames || [];
 }
 
-function parseBoxNo(rawValue) {
+function parseCtValue(rawValue) {
   if (rawValue === null || rawValue === undefined) return NaN;
   if (typeof rawValue === "number") {
     return Number.isFinite(rawValue) ? Math.trunc(rawValue) : NaN;
   }
   const text = String(rawValue).trim();
   if (!text) return NaN;
-  const tailMatch = text.match(/(\d{1,3})\s*$/);
-  if (tailMatch) {
-    return Number.parseInt(tailMatch[1], 10);
-  }
-  const anyMatch = text.match(/(\d+)/g);
-  if (anyMatch && anyMatch.length) {
-    return Number.parseInt(anyMatch[anyMatch.length - 1], 10);
-  }
-  return NaN;
+  const match = text.match(/(\d+)/g);
+  if (!match || !match.length) return NaN;
+  return Number.parseInt(match[match.length - 1], 10);
 }
 
 function buildRowOrderFromState() {
@@ -287,50 +263,33 @@ function buildRowOrderFromState() {
     return { rows: [], errors: ["<패킹> 시트에서 데이터를 찾지 못했습니다."] };
   }
 
-  let headerRowIndex = -1;
-  let headerColIndex = -1;
-  let ctHeaderColIndex = -1;
-  const scanLimit = Math.min(sheetRows.length, 10);
-  for (let i = 0; i < scanLimit; i += 1) {
-    const fcIdx = detectHeaderColumnIndex(sheetRows, i, FC_HEADER_KEYWORDS);
-    const ctIdx = detectHeaderColumnIndex(sheetRows, i, CT_HEADER_KEYWORDS);
-    if (fcIdx >= 0 && ctIdx >= 0) {
-      headerRowIndex = i;
-      headerColIndex = fcIdx;
-      ctHeaderColIndex = ctIdx;
-      break;
-    }
-  }
-
-  if (headerRowIndex < 0 || headerColIndex < 0) {
-    return { rows: [], errors: ["<패킹> 시트에서 물류센터 컬럼을 찾지 못했습니다."] };
-  }
-  if (ctHeaderColIndex < 0) {
-    return { rows: [], errors: ["<패킹> 시트에서 C/T NO. 컬럼을 찾지 못했습니다."] };
+  const headerRowIndex = 0;
+  if (sheetRows.length <= headerRowIndex + 1) {
+    return { rows: [], errors: ["<패킹> 시트에서 데이터 행을 찾지 못했습니다."] };
   }
 
   const resultRows = [];
   for (let r = headerRowIndex + 1; r < sheetRows.length; r += 1) {
     const row = sheetRows[r] || [];
-    const rawFc = String(row[headerColIndex] ?? "").trim();
-    const rawCt = row[ctHeaderColIndex];
+    const rawFc = String(row[PACKING_FC_COL_INDEX] ?? "").trim();
+    const rawCt = row[PACKING_CT_COL_INDEX];
     if (!rawFc && (rawCt === null || rawCt === undefined || String(rawCt).trim() === "")) {
       resultRows.push({
         rowIndex: r,
         fcRaw: "",
         fcNormalized: null,
-        boxNo: null
+        ct: null
       });
       continue;
     }
     const normalized = normalizeFc(rawFc);
-    const boxNo = parseBoxNo(rawCt);
-    if (!normalized || !Number.isFinite(boxNo)) {
+    const ct = parseCtValue(rawCt);
+    if (!normalized || !Number.isFinite(ct)) {
       resultRows.push({
         rowIndex: r,
         fcRaw: normalizeWhitespace(rawFc),
         fcNormalized: normalized || null,
-        boxNo: Number.isFinite(boxNo) ? boxNo : null
+        ct: Number.isFinite(ct) ? ct : null
       });
       continue;
     }
@@ -338,52 +297,39 @@ function buildRowOrderFromState() {
       rowIndex: r,
       fcRaw: normalizeWhitespace(rawFc),
       fcNormalized: normalized,
-      boxNo
+      ct
     });
   }
 
   return { rows: resultRows, errors: [] };
 }
 
-function buildOutput(rows, records) {
-  const byKey = new Map();
-
-  records.forEach((record) => {
-    const key = `${record.fc}:${record.boxNo}`;
-    if (!byKey.has(key)) {
-      byKey.set(key, record);
-    }
-  });
-
+function buildOutput(rows, pdfMap) {
   const lines = [];
-  let matchCount = 0;
+  const issues = [];
+
   rows.forEach((row) => {
-    if (row.fcNormalized && Number.isFinite(row.boxNo)) {
-      const key = `${row.fcNormalized}:${row.boxNo}`;
-      const record = byKey.get(key);
-      if (record) {
-        matchCount += 1;
-        lines.push(record.mrb);
-      } else {
-        lines.push("");
-      }
-    } else {
-      lines.push("");
+    const displayRow = row.rowIndex + 1;
+    if (!row.fcNormalized) {
+      issues.push(`행 ${displayRow}: 센터명이 비어 있습니다.`);
+      return;
     }
+    if (!Number.isFinite(row.ct)) {
+      issues.push(`행 ${displayRow}: C/T NO 값이 올바르지 않습니다. (센터: ${row.fcRaw || "-"})`);
+      return;
+    }
+    const key = `${row.fcNormalized}|${row.ct}`;
+    const mrb = pdfMap.get(key);
+    if (!mrb) {
+      issues.push(
+        `행 ${displayRow}: PDF 매칭 실패 (센터: ${row.fcRaw || "-"}, CT: ${row.ct})`
+      );
+      return;
+    }
+    lines.push(mrb);
   });
 
-  const sampleExcelKeys = rows
-    .filter((row) => row.fcNormalized && Number.isFinite(row.boxNo))
-    .slice(0, 3)
-    .map((row) => `${row.fcNormalized}:${row.boxNo}`);
-  const samplePdfKeys = Array.from(byKey.keys()).slice(0, 3);
-
-  return {
-    output: lines.join("\n"),
-    matchCount,
-    sampleExcelKeys,
-    samplePdfKeys
-  };
+  return { outputLines: lines, issues };
 }
 
 async function handleParse() {
@@ -414,45 +360,30 @@ async function handleParse() {
       return;
     }
 
-    const fcCandidates = Array.from(
-      rows.reduce((map, row) => {
-        if (!map.has(row.fcNormalized)) {
-          map.set(row.fcNormalized, {
-            normalized: row.fcNormalized,
-            key: normalizeComparable(row.fcNormalized)
-          });
-        }
-        return map;
-      }, new Map()).values()
-    );
-
-    const { records, issues } = extractRecordsFromPdf(pages, fcCandidates);
-    if (issues.length) {
-      showErrors(issues);
+    const { map: pdfMap, issues: pdfIssues } = extractPdfMap(pages);
+    if (pdfIssues.length) {
+      showErrors(pdfIssues);
       setStatus("검증 실패: PDF에서 문제가 발견되었습니다.");
       return;
     }
-
-    const { output, matchCount, sampleExcelKeys, samplePdfKeys } = buildOutput(rows, records);
-    if (records.length === 0) {
+    if (pdfMap.size === 0) {
       showErrors(["PDF에서 운송장 번호를 찾지 못했습니다. PDF 형식을 확인해 주세요."]);
       setStatus("검증 실패: PDF 인식 오류");
       return;
     }
-    if (matchCount === 0) {
-      showErrors([
-        "엑셀과 PDF가 매칭되지 않았습니다.",
-        `엑셀 예시 키: ${sampleExcelKeys.join(", ") || "없음"}`,
-        `PDF 예시 키: ${samplePdfKeys.join(", ") || "없음"}`
-      ]);
-      setStatus("검증 실패: 매칭 오류");
+
+    const { outputLines, issues: outputIssues } = buildOutput(rows, pdfMap);
+    if (outputIssues.length) {
+      showErrors(outputIssues);
+      setStatus("검증 실패: 엑셀/PDF 매칭 오류");
       return;
     }
 
+    const output = outputLines.join("\n");
     resultText.value = output;
     resultSection.hidden = false;
     copyBtn.disabled = !output;
-    setStatus(`완료되었습니다. 매칭 ${matchCount}건`);
+    setStatus(`완료되었습니다. 매칭 ${outputLines.length}건`);
   } catch (err) {
     showErrors([err instanceof Error ? err.message : "처리 중 오류가 발생했습니다."]);
     setStatus("검증 실패: 입력을 확인해 주세요.");
