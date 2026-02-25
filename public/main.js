@@ -282,18 +282,18 @@ function buildRowOrderFromState() {
     return { rows: [], errors: ["<패킹> 시트를 찾지 못했습니다. 시트명을 확인해 주세요."] };
   }
 
-  const rows = getSheetRows(excelState.workbook, selectedSheet);
-  if (!rows.length) {
+  const sheetRows = getSheetRows(excelState.workbook, selectedSheet);
+  if (!sheetRows.length) {
     return { rows: [], errors: ["<패킹> 시트에서 데이터를 찾지 못했습니다."] };
   }
 
   let headerRowIndex = -1;
   let headerColIndex = -1;
   let ctHeaderColIndex = -1;
-  const scanLimit = Math.min(rows.length, 10);
+  const scanLimit = Math.min(sheetRows.length, 10);
   for (let i = 0; i < scanLimit; i += 1) {
-    const fcIdx = detectHeaderColumnIndex(rows, i, FC_HEADER_KEYWORDS);
-    const ctIdx = detectHeaderColumnIndex(rows, i, CT_HEADER_KEYWORDS);
+    const fcIdx = detectHeaderColumnIndex(sheetRows, i, FC_HEADER_KEYWORDS);
+    const ctIdx = detectHeaderColumnIndex(sheetRows, i, CT_HEADER_KEYWORDS);
     if (fcIdx >= 0 && ctIdx >= 0) {
       headerRowIndex = i;
       headerColIndex = fcIdx;
@@ -309,23 +309,32 @@ function buildRowOrderFromState() {
     return { rows: [], errors: ["<패킹> 시트에서 C/T NO. 컬럼을 찾지 못했습니다."] };
   }
 
-  for (let r = headerRowIndex + 1; r < rows.length; r += 1) {
-    const row = rows[r] || [];
+  const resultRows = [];
+  for (let r = headerRowIndex + 1; r < sheetRows.length; r += 1) {
+    const row = sheetRows[r] || [];
     const rawFc = String(row[headerColIndex] ?? "").trim();
     const rawCt = row[ctHeaderColIndex];
     if (!rawFc && (rawCt === null || rawCt === undefined || String(rawCt).trim() === "")) {
+      resultRows.push({
+        rowIndex: r,
+        fcRaw: "",
+        fcNormalized: null,
+        boxNo: null
+      });
       continue;
     }
     const normalized = normalizeFc(rawFc);
-    if (!normalized) continue;
     const boxNo = parseBoxNo(rawCt);
-    if (!Number.isFinite(boxNo)) {
-      return {
-        rows: [],
-        errors: [`${r + 1}행: C/T NO. 값을 박스번호로 해석할 수 없습니다.`]
-      };
+    if (!normalized || !Number.isFinite(boxNo)) {
+      resultRows.push({
+        rowIndex: r,
+        fcRaw: normalizeWhitespace(rawFc),
+        fcNormalized: normalized || null,
+        boxNo: Number.isFinite(boxNo) ? boxNo : null
+      });
+      continue;
     }
-    rows.push({
+    resultRows.push({
       rowIndex: r,
       fcRaw: normalizeWhitespace(rawFc),
       fcNormalized: normalized,
@@ -333,7 +342,7 @@ function buildRowOrderFromState() {
     });
   }
 
-  return { rows, errors: [] };
+  return { rows: resultRows, errors: [] };
 }
 
 function buildOutput(rows, records) {
@@ -349,17 +358,24 @@ function buildOutput(rows, records) {
   const lines = [];
   let matchCount = 0;
   rows.forEach((row) => {
-    const key = `${row.fcNormalized}:${row.boxNo}`;
-    const record = byKey.get(key);
-    if (record) {
-      matchCount += 1;
-      lines.push(record.mrb);
+    if (row.fcNormalized && Number.isFinite(row.boxNo)) {
+      const key = `${row.fcNormalized}:${row.boxNo}`;
+      const record = byKey.get(key);
+      if (record) {
+        matchCount += 1;
+        lines.push(record.mrb);
+      } else {
+        lines.push("");
+      }
     } else {
       lines.push("");
     }
   });
 
-  const sampleExcelKeys = rows.slice(0, 3).map((row) => `${row.fcNormalized}:${row.boxNo}`);
+  const sampleExcelKeys = rows
+    .filter((row) => row.fcNormalized && Number.isFinite(row.boxNo))
+    .slice(0, 3)
+    .map((row) => `${row.fcNormalized}:${row.boxNo}`);
   const samplePdfKeys = Array.from(byKey.keys()).slice(0, 3);
 
   return {
