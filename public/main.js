@@ -268,7 +268,6 @@ function buildRowOrderFromState() {
     return { rows: [], errors: ["<패킹> 시트에서 C/T NO. 컬럼을 찾지 못했습니다."] };
   }
 
-  const seen = new Set();
   for (let r = headerRowIndex + 1; r < rows.length; r += 1) {
     const row = rows[r] || [];
     const rawFc = String(row[headerColIndex] ?? "").trim();
@@ -285,14 +284,6 @@ function buildRowOrderFromState() {
         errors: [`${r + 1}행: C/T NO. 값을 박스번호로 해석할 수 없습니다.`]
       };
     }
-    const key = `${normalized}:${boxNo}`;
-    if (seen.has(key)) {
-      return {
-        rows: [],
-        errors: [`${r + 1}행: 동일한 물류센터/박스번호 조합이 중복되었습니다.`]
-      };
-    }
-    seen.add(key);
     rows.push({
       rowIndex: r,
       fcRaw: normalizeWhitespace(rawFc),
@@ -310,19 +301,10 @@ function buildOutput(rows, records) {
 
   records.forEach((record) => {
     const key = `${record.fc}:${record.boxNo}`;
-    if (byKey.has(key)) {
-      const prev = byKey.get(key);
-      errors.push(
-        `FC ${record.fc}: 박스번호 ${record.boxNo}가 중복되었습니다. (페이지 ${prev.pageNo}, ${record.pageNo})`
-      );
-    } else {
+    if (!byKey.has(key)) {
       byKey.set(key, record);
     }
   });
-
-  if (errors.length) {
-    return { output: "", errors };
-  }
 
   const lines = [];
   rows.forEach((row) => {
