@@ -377,9 +377,9 @@ async function handleParse() {
       return;
     }
 
-    const { output, errors } = buildOutput(rows, records);
-    if (errors.length) {
-      showErrors(errors);
+    const { output, errors: outputErrors } = buildOutput(rows, records);
+    if (outputErrors.length) {
+      showErrors(outputErrors);
       setStatus("검증 실패: FC/박스번호 오류가 있습니다.");
       return;
     }
