@@ -4,18 +4,10 @@ const pdfInput = document.getElementById("pdfInput");
 const excelInput = document.getElementById("excelInput");
 const parseBtn = document.getElementById("parseBtn");
 const copyBtn = document.getElementById("copyBtn");
-const showFcToggle = document.getElementById("showFcToggle");
 const statusEl = document.getElementById("status");
 const errorBox = document.getElementById("errorBox");
 const resultSection = document.getElementById("resultSection");
 const resultText = document.getElementById("resultText");
-const excelOptions = document.getElementById("excelOptions");
-const sheetSelect = document.getElementById("sheetSelect");
-const headerRowInput = document.getElementById("headerRowInput");
-const columnSelectField = document.getElementById("columnSelectField");
-const columnSelect = document.getElementById("columnSelect");
-const ctColumnSelectField = document.getElementById("ctColumnSelectField");
-const ctColumnSelect = document.getElementById("ctColumnSelect");
 
 const PDF_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 const FC_HEADER_KEYWORDS = ["물류센터", "센터", "FC", "받는 사람", "수취인", "배송처", "납품처"];
@@ -65,28 +57,12 @@ function resetOutput() {
 
 const excelState = {
   workbook: null,
-  sheetNames: [],
-  selectedSheet: "",
-  headerRowIndex: 0,
-  headerColIndex: -1,
-  ctHeaderColIndex: -1,
-  rows: []
+  sheetNames: []
 };
 
 function clearExcelState() {
   excelState.workbook = null;
   excelState.sheetNames = [];
-  excelState.selectedSheet = "";
-  excelState.headerRowIndex = 0;
-  excelState.headerColIndex = -1;
-  excelState.ctHeaderColIndex = -1;
-  excelState.rows = [];
-  sheetSelect.innerHTML = "";
-  columnSelect.innerHTML = "";
-  ctColumnSelect.innerHTML = "";
-  excelOptions.hidden = true;
-  columnSelectField.hidden = true;
-  ctColumnSelectField.hidden = true;
 }
 
 function requireFiles() {
@@ -133,56 +109,6 @@ function detectHeaderColumnIndex(rows, headerRowIndex, keywords) {
     return matches[0];
   }
   return -1;
-}
-
-function columnLabel(index) {
-  let label = "";
-  let n = index + 1;
-  while (n > 0) {
-    const mod = (n - 1) % 26;
-    label = String.fromCharCode(65 + mod) + label;
-    n = Math.floor((n - 1) / 26);
-  }
-  return label;
-}
-
-function populateColumnSelect(selectEl, rows, headerRowIndex) {
-  const headerRow = rows[headerRowIndex] || [];
-  selectEl.innerHTML = "";
-  headerRow.forEach((cell, index) => {
-    const value = normalizeWhitespace(String(cell ?? ""));
-    const option = document.createElement("option");
-    option.value = String(index);
-    option.textContent = `${columnLabel(index)}: ${value || "빈칸"}`;
-    selectEl.appendChild(option);
-  });
-}
-
-function updateColumnSelection() {
-  if (!excelState.rows.length) return;
-  const headerRowIndex = excelState.headerRowIndex;
-  const detectedFc = detectHeaderColumnIndex(excelState.rows, headerRowIndex, FC_HEADER_KEYWORDS);
-  const detectedCt = detectHeaderColumnIndex(excelState.rows, headerRowIndex, CT_HEADER_KEYWORDS);
-  populateColumnSelect(columnSelect, excelState.rows, headerRowIndex);
-  populateColumnSelect(ctColumnSelect, excelState.rows, headerRowIndex);
-
-  if (detectedFc >= 0) {
-    excelState.headerColIndex = detectedFc;
-    columnSelect.value = String(detectedFc);
-    columnSelectField.hidden = true;
-  } else {
-    excelState.headerColIndex = -1;
-    columnSelectField.hidden = false;
-  }
-
-  if (detectedCt >= 0) {
-    excelState.ctHeaderColIndex = detectedCt;
-    ctColumnSelect.value = String(detectedCt);
-    ctColumnSelectField.hidden = true;
-  } else {
-    excelState.ctHeaderColIndex = -1;
-    ctColumnSelectField.hidden = false;
-  }
 }
 
 function extractFcFromLines(lines) {
@@ -293,40 +219,6 @@ function loadWorkbookFromFile(file) {
 function initializeExcelState(workbook) {
   excelState.workbook = workbook;
   excelState.sheetNames = workbook.SheetNames || [];
-  sheetSelect.innerHTML = "";
-  const defaultSheet = pickDefaultSheet(excelState.sheetNames);
-  if (!defaultSheet) {
-    const placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = "시트를 선택하세요";
-    sheetSelect.appendChild(placeholder);
-  }
-  excelState.sheetNames.forEach((name) => {
-    const option = document.createElement("option");
-    option.value = name;
-    option.textContent = name;
-    sheetSelect.appendChild(option);
-  });
-
-  excelState.selectedSheet = defaultSheet || "";
-  sheetSelect.value = excelState.selectedSheet;
-  excelOptions.hidden = false;
-  updateRowsForSelectedSheet();
-}
-
-function updateRowsForSelectedSheet() {
-  if (!excelState.workbook || !excelState.selectedSheet) {
-    excelState.rows = [];
-    excelState.headerColIndex = -1;
-    excelState.ctHeaderColIndex = -1;
-    columnSelectField.hidden = true;
-    ctColumnSelectField.hidden = true;
-    return;
-  }
-  excelState.rows = getSheetRows(excelState.workbook, excelState.selectedSheet);
-  const headerRowValue = Number.parseInt(headerRowInput.value, 10);
-  excelState.headerRowIndex = Number.isFinite(headerRowValue) && headerRowValue > 0 ? headerRowValue - 1 : 0;
-  updateColumnSelection();
 }
 
 function parseBoxNo(rawValue) {
@@ -351,25 +243,36 @@ function buildRowOrderFromState() {
   if (!excelState.workbook) {
     return { rows: [], errors: ["엑셀 파일을 다시 선택해 주세요."] };
   }
-  if (!excelState.selectedSheet) {
-    return { rows: [], errors: ["엑셀 시트를 선택해 주세요."] };
-  }
-  if (excelState.headerColIndex < 0) {
-    return { rows: [], errors: ["물류센터 컬럼을 선택해 주세요."] };
-  }
-  if (excelState.ctHeaderColIndex < 0) {
-    return { rows: [], errors: ["C/T NO. 컬럼을 선택해 주세요."] };
-  }
-  if (!excelState.rows.length) {
-    return { rows: [], errors: ["선택한 시트에서 데이터를 찾지 못했습니다."] };
+  if (!excelState.sheetNames.length) {
+    return { rows: [], errors: ["엑셀에서 시트를 찾지 못했습니다."] };
   }
 
-  const rows = [];
+  const selectedSheet = pickDefaultSheet(excelState.sheetNames);
+  if (!selectedSheet) {
+    return { rows: [], errors: ["<패킹> 시트를 찾지 못했습니다. 시트명을 확인해 주세요."] };
+  }
+
+  const rows = getSheetRows(excelState.workbook, selectedSheet);
+  if (!rows.length) {
+    return { rows: [], errors: ["<패킹> 시트에서 데이터를 찾지 못했습니다."] };
+  }
+
+  const headerRowIndex = 0;
+  const headerColIndex = detectHeaderColumnIndex(rows, headerRowIndex, FC_HEADER_KEYWORDS);
+  const ctHeaderColIndex = detectHeaderColumnIndex(rows, headerRowIndex, CT_HEADER_KEYWORDS);
+
+  if (headerColIndex < 0) {
+    return { rows: [], errors: ["<패킹> 시트에서 물류센터 컬럼을 찾지 못했습니다."] };
+  }
+  if (ctHeaderColIndex < 0) {
+    return { rows: [], errors: ["<패킹> 시트에서 C/T NO. 컬럼을 찾지 못했습니다."] };
+  }
+
   const seen = new Set();
-  for (let r = excelState.headerRowIndex + 1; r < excelState.rows.length; r += 1) {
-    const row = excelState.rows[r] || [];
-    const rawFc = String(row[excelState.headerColIndex] ?? "").trim();
-    const rawCt = row[excelState.ctHeaderColIndex];
+  for (let r = headerRowIndex + 1; r < rows.length; r += 1) {
+    const row = rows[r] || [];
+    const rawFc = String(row[headerColIndex] ?? "").trim();
+    const rawCt = row[ctHeaderColIndex];
     if (!rawFc && (rawCt === null || rawCt === undefined || String(rawCt).trim() === "")) {
       continue;
     }
@@ -401,7 +304,7 @@ function buildRowOrderFromState() {
   return { rows, errors: [] };
 }
 
-function buildOutput(rows, records, showFc) {
+function buildOutput(rows, records) {
   const errors = [];
   const byKey = new Map();
 
@@ -422,17 +325,12 @@ function buildOutput(rows, records, showFc) {
   }
 
   const lines = [];
-  let lastFc = null;
   rows.forEach((row) => {
     const key = `${row.fcNormalized}:${row.boxNo}`;
     const record = byKey.get(key);
     if (!record) {
       errors.push(`엑셀 ${row.rowIndex + 1}행: ${row.fcRaw} / 박스번호 ${row.boxNo}가 PDF에 없습니다.`);
       return;
-    }
-    if (showFc && lastFc !== row.fcRaw) {
-      lines.push(`FC: ${row.fcRaw}`);
-      lastFc = row.fcRaw;
     }
     lines.push(record.mrb);
   });
@@ -479,7 +377,7 @@ async function handleParse() {
       return;
     }
 
-    const { output, errors } = buildOutput(rows, records, showFcToggle.checked);
+    const { output, errors } = buildOutput(rows, records);
     if (errors.length) {
       showErrors(errors);
       setStatus("검증 실패: FC/박스번호 오류가 있습니다.");
@@ -520,50 +418,9 @@ excelInput.addEventListener("change", async () => {
     setStatus("엑셀 파일을 읽는 중입니다...");
     const workbook = await loadWorkbookFromFile(excelInput.files[0]);
     initializeExcelState(workbook);
-  if (!excelState.selectedSheet) {
-    setStatus("엑셀 시트를 선택해 주세요.");
-    return;
-  }
-  if (excelState.headerColIndex < 0 || excelState.ctHeaderColIndex < 0) {
-    setStatus("물류센터/C/T NO. 컬럼을 선택해 주세요.");
-    return;
-  }
-  setStatus("엑셀 시트와 헤더 정보를 확인해 주세요.");
+    setStatus("<패킹> 시트를 자동으로 찾습니다. 분석 버튼을 눌러주세요.");
   } catch (err) {
     clearExcelState();
     showErrors([err instanceof Error ? err.message : "엑셀 파일을 읽는 중 오류가 발생했습니다."]);
-  }
-});
-
-sheetSelect.addEventListener("change", () => {
-  excelState.selectedSheet = sheetSelect.value;
-  updateRowsForSelectedSheet();
-  if (!excelState.selectedSheet) {
-    setStatus("엑셀 시트를 선택해 주세요.");
-    return;
-  }
-  if (excelState.headerColIndex < 0 || excelState.ctHeaderColIndex < 0) {
-    setStatus("물류센터/C/T NO. 컬럼을 선택해 주세요.");
-  }
-});
-
-headerRowInput.addEventListener("change", () => {
-  updateRowsForSelectedSheet();
-  if (excelState.headerColIndex < 0 || excelState.ctHeaderColIndex < 0) {
-    setStatus("물류센터/C/T NO. 컬럼을 선택해 주세요.");
-  }
-});
-
-columnSelect.addEventListener("change", () => {
-  excelState.headerColIndex = Number.parseInt(columnSelect.value, 10);
-  if (excelState.headerColIndex >= 0) {
-    setStatus("엑셀 시트와 헤더 정보를 확인해 주세요.");
-  }
-});
-
-ctColumnSelect.addEventListener("change", () => {
-  excelState.ctHeaderColIndex = Number.parseInt(ctColumnSelect.value, 10);
-  if (excelState.ctHeaderColIndex >= 0) {
-    setStatus("엑셀 시트와 헤더 정보를 확인해 주세요.");
   }
 });
