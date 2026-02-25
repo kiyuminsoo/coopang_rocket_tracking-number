@@ -82,6 +82,14 @@ function resetOutput() {
   resultSection.hidden = true;
   resultText.value = "";
   copyBtn.disabled = true;
+  if (ui.copyVerifyBtn) ui.copyVerifyBtn.disabled = true;
+  if (ui.statsSection) ui.statsSection.hidden = true;
+  if (ui.matchedBody) ui.matchedBody.innerHTML = "";
+  if (ui.skipSummaryBody) ui.skipSummaryBody.innerHTML = "";
+  if (ui.skipDetailsBody) ui.skipDetailsBody.innerHTML = "";
+  if (ui.unusedList) ui.unusedList.innerHTML = "";
+  if (ui.unusedBox) ui.unusedBox.hidden = true;
+  latestResult = null;
 }
 
 const excelState = {
@@ -306,6 +314,8 @@ function buildOutput(rows, pdfMap) {
   const lines = [];
   const issues = [];
   const skips = [];
+  const matched = [];
+  const usedMrbs = new Set();
 
   rows.forEach((row) => {
     const displayRow = row.rowIndex + 1;
@@ -327,16 +337,380 @@ function buildOutput(rows, pdfMap) {
       });
       return;
     }
+    const ctFromMrb = Number.parseInt(String(mrb).split("-").pop() || "", 10);
+    const ctMatches = Number.isFinite(ctFromMrb) && ctFromMrb === row.ct;
+    if (!ctMatches) {
+      issues.push(`행 ${displayRow}: CT와 MRB 끝 3자리가 일치하지 않습니다. (CT: ${row.ct}, MRB: ${mrb})`);
+      return;
+    }
     lines.push(mrb);
+    matched.push({
+      rowNo: displayRow,
+      fcRaw: row.fcRaw || "-",
+      ct: row.ct,
+      mrb,
+      ctMatches: true
+    });
+    usedMrbs.add(mrb);
   });
 
-  return { outputLines: lines, issues, skips };
+  return { outputLines: lines, issues, skips, matched, usedMrbs };
 }
+
+const ui = {
+  statsSection: null,
+  statsValues: {},
+  matchedSection: null,
+  matchedBody: null,
+  skipSection: null,
+  skipSummaryBody: null,
+  skipDetailsBody: null,
+  unusedBox: null,
+  unusedList: null,
+  copyVerifyBtn: null,
+  resultLabel: null
+};
+
+function ensureStatsSection() {
+  if (ui.statsSection) return;
+  const inputCard = parseBtn.closest(".card");
+  const statsSection = document.createElement("section");
+  statsSection.className = "card";
+  statsSection.id = "statsSection";
+  const title = document.createElement("h2");
+  title.textContent = "요약";
+  const grid = document.createElement("div");
+  grid.style.display = "grid";
+  grid.style.gridTemplateColumns = "repeat(auto-fit, minmax(180px, 1fr))";
+  grid.style.gap = "10px";
+  grid.style.marginTop = "10px";
+
+  const items = [
+    { key: "totalExcelRows", label: "엑셀 대상 행 수" },
+    { key: "totalPdfRecords", label: "PDF 페이지/레코드 수" },
+    { key: "matchedCount", label: "매칭 성공" },
+    { key: "skippedCount", label: "PDF에 없어 스킵" },
+    { key: "fatalErrorCount", label: "치명적 오류" },
+    { key: "unusedPdfCount", label: "PDF 미사용 MRB" }
+  ];
+
+  items.forEach((item) => {
+    const box = document.createElement("div");
+    box.style.border = "1px solid #e1e1e1";
+    box.style.borderRadius = "6px";
+    box.style.padding = "10px 12px";
+    box.style.background = "#fff";
+    const label = document.createElement("div");
+    label.textContent = item.label;
+    label.style.fontSize = "12px";
+    label.style.color = "#555";
+    const value = document.createElement("div");
+    value.textContent = "-";
+    value.style.fontSize = "18px";
+    value.style.fontWeight = "600";
+    value.style.marginTop = "4px";
+    box.appendChild(label);
+    box.appendChild(value);
+    grid.appendChild(box);
+    ui.statsValues[item.key] = value;
+  });
+
+  statsSection.appendChild(title);
+  statsSection.appendChild(grid);
+  statsSection.hidden = true;
+
+  if (inputCard && inputCard.parentNode) {
+    inputCard.parentNode.insertBefore(statsSection, resultSection);
+  } else {
+    document.body.appendChild(statsSection);
+  }
+  ui.statsSection = statsSection;
+}
+
+function setStats(stats) {
+  ensureStatsSection();
+  ui.statsSection.hidden = false;
+  const map = {
+    totalExcelRows: stats.totalExcelRows ?? "-",
+    totalPdfRecords: stats.totalPdfPages !== undefined
+      ? `${stats.totalPdfPages} / ${stats.totalPdfRecords ?? 0}`
+      : "-",
+    matchedCount: stats.matchedCount ?? "-",
+    skippedCount: stats.skippedCount ?? "-",
+    fatalErrorCount: stats.fatalErrorCount ?? "-",
+    unusedPdfCount: stats.unusedPdfCount ?? "-"
+  };
+  Object.entries(map).forEach(([key, value]) => {
+    if (ui.statsValues[key]) ui.statsValues[key].textContent = String(value);
+  });
+}
+
+function ensureResultLayout() {
+  if (ui.matchedSection) return;
+  const resultTitle = resultSection.querySelector("h2");
+  if (resultTitle) resultTitle.textContent = "결과";
+
+  const matchedSection = document.createElement("div");
+  const matchedTitle = document.createElement("h3");
+  matchedTitle.textContent = "매칭 성공";
+  matchedTitle.style.marginTop = "18px";
+  const matchedWrap = document.createElement("div");
+  matchedWrap.style.maxHeight = "280px";
+  matchedWrap.style.overflow = "auto";
+  matchedWrap.style.border = "1px solid #e1e1e1";
+  matchedWrap.style.borderRadius = "6px";
+  matchedWrap.style.marginTop = "8px";
+
+  const matchedTable = document.createElement("table");
+  matchedTable.style.width = "100%";
+  matchedTable.style.borderCollapse = "collapse";
+  const matchedHead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  ["엑셀 행번호", "센터(엑셀 원문)", "CT", "MRB", "CT==MRB끝3자리"].forEach((text) => {
+    const th = document.createElement("th");
+    th.textContent = text;
+    th.style.position = "sticky";
+    th.style.top = "0";
+    th.style.background = "#fff";
+    th.style.borderBottom = "1px solid #ddd";
+    th.style.padding = "8px 6px";
+    th.style.textAlign = "left";
+    th.style.fontSize = "12px";
+    headRow.appendChild(th);
+  });
+  matchedHead.appendChild(headRow);
+  const matchedBody = document.createElement("tbody");
+  matchedTable.appendChild(matchedHead);
+  matchedTable.appendChild(matchedBody);
+  matchedWrap.appendChild(matchedTable);
+  matchedSection.appendChild(matchedTitle);
+  matchedSection.appendChild(matchedWrap);
+
+  const skipSection = document.createElement("div");
+  const skipTitle = document.createElement("h3");
+  skipTitle.textContent = "스킵";
+  skipTitle.style.marginTop = "18px";
+  const skipSummaryTitle = document.createElement("div");
+  skipSummaryTitle.textContent = "센터별 요약";
+  skipSummaryTitle.style.fontSize = "13px";
+  skipSummaryTitle.style.marginTop = "8px";
+  const skipSummaryWrap = document.createElement("div");
+  skipSummaryWrap.style.border = "1px solid #e1e1e1";
+  skipSummaryWrap.style.borderRadius = "6px";
+  skipSummaryWrap.style.marginTop = "6px";
+  skipSummaryWrap.style.overflow = "auto";
+  const skipSummaryTable = document.createElement("table");
+  skipSummaryTable.style.width = "100%";
+  skipSummaryTable.style.borderCollapse = "collapse";
+  const skipSummaryHead = document.createElement("thead");
+  const skipSummaryHeadRow = document.createElement("tr");
+  ["센터", "스킵 건수", "CT 분포"].forEach((text) => {
+    const th = document.createElement("th");
+    th.textContent = text;
+    th.style.position = "sticky";
+    th.style.top = "0";
+    th.style.background = "#fff";
+    th.style.borderBottom = "1px solid #ddd";
+    th.style.padding = "8px 6px";
+    th.style.textAlign = "left";
+    th.style.fontSize = "12px";
+    skipSummaryHeadRow.appendChild(th);
+  });
+  skipSummaryHead.appendChild(skipSummaryHeadRow);
+  const skipSummaryBody = document.createElement("tbody");
+  skipSummaryTable.appendChild(skipSummaryHead);
+  skipSummaryTable.appendChild(skipSummaryBody);
+  skipSummaryWrap.appendChild(skipSummaryTable);
+
+  const skipDetails = document.createElement("details");
+  skipDetails.style.marginTop = "10px";
+  const skipSummary = document.createElement("summary");
+  skipSummary.textContent = "자세히 보기";
+  skipSummary.style.cursor = "pointer";
+  skipSummary.style.fontSize = "13px";
+  skipDetails.appendChild(skipSummary);
+  const skipDetailsWrap = document.createElement("div");
+  skipDetailsWrap.style.maxHeight = "240px";
+  skipDetailsWrap.style.overflow = "auto";
+  skipDetailsWrap.style.border = "1px solid #e1e1e1";
+  skipDetailsWrap.style.borderRadius = "6px";
+  skipDetailsWrap.style.marginTop = "8px";
+  const skipDetailsTable = document.createElement("table");
+  skipDetailsTable.style.width = "100%";
+  skipDetailsTable.style.borderCollapse = "collapse";
+  const skipDetailsHead = document.createElement("thead");
+  const skipDetailsHeadRow = document.createElement("tr");
+  ["엑셀 행번호", "센터", "CT", "사유"].forEach((text) => {
+    const th = document.createElement("th");
+    th.textContent = text;
+    th.style.position = "sticky";
+    th.style.top = "0";
+    th.style.background = "#fff";
+    th.style.borderBottom = "1px solid #ddd";
+    th.style.padding = "8px 6px";
+    th.style.textAlign = "left";
+    th.style.fontSize = "12px";
+    skipDetailsHeadRow.appendChild(th);
+  });
+  skipDetailsHead.appendChild(skipDetailsHeadRow);
+  const skipDetailsBody = document.createElement("tbody");
+  skipDetailsTable.appendChild(skipDetailsHead);
+  skipDetailsTable.appendChild(skipDetailsBody);
+  skipDetailsWrap.appendChild(skipDetailsTable);
+  skipDetails.appendChild(skipDetailsWrap);
+
+  skipSection.appendChild(skipTitle);
+  skipSection.appendChild(skipSummaryTitle);
+  skipSection.appendChild(skipSummaryWrap);
+  skipSection.appendChild(skipDetails);
+
+  const resultLabel = document.createElement("div");
+  resultLabel.textContent = "엑셀 붙여넣기용(MRB만)";
+  resultLabel.style.fontSize = "13px";
+  resultLabel.style.marginTop = "18px";
+  resultLabel.style.marginBottom = "6px";
+
+  resultSection.insertBefore(matchedSection, resultText);
+  resultSection.insertBefore(skipSection, resultText);
+  resultSection.insertBefore(resultLabel, resultText);
+
+  ui.matchedSection = matchedSection;
+  ui.matchedBody = matchedBody;
+  ui.skipSection = skipSection;
+  ui.skipSummaryBody = skipSummaryBody;
+  ui.skipDetailsBody = skipDetailsBody;
+  ui.resultLabel = resultLabel;
+}
+
+function ensureUnusedBox() {
+  if (ui.unusedBox) return;
+  ensureWarningBox();
+  ui.unusedBox = warningBox;
+  const list = document.createElement("div");
+  list.style.marginTop = "6px";
+  list.style.fontSize = "13px";
+  ui.unusedList = list;
+  ui.unusedBox.appendChild(list);
+}
+
+function updateUnusedBox(unusedMrbs) {
+  ensureUnusedBox();
+  if (!unusedMrbs.length) {
+    ui.unusedBox.hidden = true;
+    ui.unusedList.innerHTML = "";
+    return;
+  }
+  ui.unusedBox.hidden = false;
+  ui.unusedBox.innerHTML = "PDF MRB 중 엑셀에 사용되지 않은 MRB가 있습니다.";
+  ui.unusedBox.appendChild(ui.unusedList);
+  const preview = unusedMrbs.slice(0, 20);
+  const extra = unusedMrbs.length > 20 ? `외 ${unusedMrbs.length - 20}건` : "";
+  const lines = [preview.join(", "), extra].filter(Boolean).join("<br>");
+  ui.unusedList.innerHTML = lines;
+}
+
+function updateMatchedTable(matched) {
+  ensureResultLayout();
+  ui.matchedBody.innerHTML = "";
+  matched.forEach((item) => {
+    const row = document.createElement("tr");
+    [item.rowNo, item.fcRaw, item.ct, item.mrb, item.ctMatches ? "OK" : "FAIL"].forEach((value) => {
+      const td = document.createElement("td");
+      td.textContent = String(value);
+      td.style.padding = "6px";
+      td.style.borderBottom = "1px solid #f0f0f0";
+      td.style.fontSize = "13px";
+      row.appendChild(td);
+    });
+    ui.matchedBody.appendChild(row);
+  });
+}
+
+function buildSkipSummary(skips) {
+  const map = new Map();
+  skips.forEach((item) => {
+    const key = item.fcRaw || "-";
+    if (!map.has(key)) {
+      map.set(key, { count: 0, ctCounts: new Map(), min: null, max: null });
+    }
+    const entry = map.get(key);
+    entry.count += 1;
+    const ctValue = Number.isFinite(item.ct) ? item.ct : null;
+    if (ctValue !== null) {
+      entry.min = entry.min === null ? ctValue : Math.min(entry.min, ctValue);
+      entry.max = entry.max === null ? ctValue : Math.max(entry.max, ctValue);
+      entry.ctCounts.set(ctValue, (entry.ctCounts.get(ctValue) || 0) + 1);
+    }
+  });
+  return Array.from(map.entries()).map(([center, entry]) => {
+    const topCts = Array.from(entry.ctCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([ct]) => ct);
+    const range = entry.min !== null ? `${entry.min}~${entry.max}` : "-";
+    const topLabel = topCts.length ? ` (상위: ${topCts.join(", ")})` : "";
+    return {
+      center,
+      count: entry.count,
+      dist: `${range}${topLabel}`
+    };
+  });
+}
+
+function updateSkipSection(skips) {
+  ensureResultLayout();
+  ui.skipSummaryBody.innerHTML = "";
+  ui.skipDetailsBody.innerHTML = "";
+  const summary = buildSkipSummary(skips);
+  summary.forEach((item) => {
+    const row = document.createElement("tr");
+    [item.center, item.count, item.dist].forEach((value) => {
+      const td = document.createElement("td");
+      td.textContent = String(value);
+      td.style.padding = "6px";
+      td.style.borderBottom = "1px solid #f0f0f0";
+      td.style.fontSize = "13px";
+      row.appendChild(td);
+    });
+    ui.skipSummaryBody.appendChild(row);
+  });
+  skips.forEach((item) => {
+    const row = document.createElement("tr");
+    [item.rowNo, item.fcRaw, item.ct, "PDF에 없음"].forEach((value) => {
+      const td = document.createElement("td");
+      td.textContent = String(value);
+      td.style.padding = "6px";
+      td.style.borderBottom = "1px solid #f0f0f0";
+      td.style.fontSize = "13px";
+      row.appendChild(td);
+    });
+    ui.skipDetailsBody.appendChild(row);
+  });
+}
+
+function ensureCopyButtons() {
+  if (ui.copyVerifyBtn) return;
+  copyBtn.textContent = "MRB만 복사";
+  const actions = copyBtn.parentNode;
+  const verifyBtn = document.createElement("button");
+  verifyBtn.id = "copyVerifyBtn";
+  verifyBtn.textContent = "검증용 복사";
+  verifyBtn.className = "secondary";
+  verifyBtn.disabled = true;
+  if (actions) {
+    actions.appendChild(verifyBtn);
+  }
+  verifyBtn.addEventListener("click", handleVerifyCopy);
+  ui.copyVerifyBtn = verifyBtn;
+}
+
+let latestResult = null;
 
 async function handleParse() {
   showErrors([]);
   showWarnings([]);
   resetOutput();
+  ensureCopyButtons();
 
   if (!requireFiles()) return;
   if (!window.pdfjsLib || !window.XLSX) {
@@ -351,53 +725,118 @@ async function handleParse() {
       Promise.resolve(buildRowOrderFromState()),
       parsePdf(pdfInput.files[0])
     ]);
+    setStats({
+      totalExcelRows: rows.length,
+      totalPdfPages: pages.length,
+      totalPdfRecords: 0,
+      matchedCount: 0,
+      skippedCount: 0,
+      fatalErrorCount: 0,
+      unusedPdfCount: 0
+    });
     if (errors.length) {
       showErrors(errors);
+      setStats({
+        totalExcelRows: rows.length,
+        totalPdfPages: pages.length,
+        totalPdfRecords: 0,
+        matchedCount: 0,
+        skippedCount: 0,
+        fatalErrorCount: errors.length,
+        unusedPdfCount: 0
+      });
       setStatus("검증 실패: 엑셀 입력 오류");
       return;
     }
     if (!rows.length) {
       showErrors(["엑셀에서 물류센터/C/T NO. 목록을 찾지 못했습니다."]);
+      setStats({
+        totalExcelRows: 0,
+        totalPdfPages: pages.length,
+        totalPdfRecords: 0,
+        matchedCount: 0,
+        skippedCount: 0,
+        fatalErrorCount: 1,
+        unusedPdfCount: 0
+      });
       setStatus("검증 실패: 엑셀 입력 오류");
       return;
     }
 
     const { map: pdfMap, issues: pdfIssues } = extractPdfMap(pages);
+    setStats({
+      totalExcelRows: rows.length,
+      totalPdfPages: pages.length,
+      totalPdfRecords: pdfMap.size,
+      matchedCount: 0,
+      skippedCount: 0,
+      fatalErrorCount: 0,
+      unusedPdfCount: 0
+    });
     if (pdfIssues.length) {
       showErrors(pdfIssues);
+      setStats({
+        totalExcelRows: rows.length,
+        totalPdfPages: pages.length,
+        totalPdfRecords: pdfMap.size,
+        matchedCount: 0,
+        skippedCount: 0,
+        fatalErrorCount: pdfIssues.length,
+        unusedPdfCount: 0
+      });
       setStatus("검증 실패: PDF에서 문제가 발견되었습니다.");
       return;
     }
     if (pdfMap.size === 0) {
       showErrors(["PDF에서 운송장 번호를 찾지 못했습니다. PDF 형식을 확인해 주세요."]);
+      setStats({
+        totalExcelRows: rows.length,
+        totalPdfPages: pages.length,
+        totalPdfRecords: 0,
+        matchedCount: 0,
+        skippedCount: 0,
+        fatalErrorCount: 1,
+        unusedPdfCount: 0
+      });
       setStatus("검증 실패: PDF 인식 오류");
       return;
     }
 
-    const { outputLines, issues: outputIssues, skips } = buildOutput(rows, pdfMap);
+    const { outputLines, issues: outputIssues, skips, matched, usedMrbs } = buildOutput(rows, pdfMap);
     if (outputIssues.length) {
       showErrors(outputIssues);
+      setStats({
+        totalExcelRows: rows.length,
+        totalPdfPages: pages.length,
+        totalPdfRecords: pdfMap.size,
+        matchedCount: 0,
+        skippedCount: 0,
+        fatalErrorCount: outputIssues.length,
+        unusedPdfCount: 0
+      });
       setStatus("검증 실패: 엑셀/PDF 매칭 오류");
       return;
     }
 
-    if (skips.length) {
-      const preview = skips.slice(0, 20).map((item) => {
-        return `행 ${item.rowNo}: ${item.fcRaw}, CT ${item.ct}`;
-      });
-      const extra = skips.length > 20 ? `외 ${skips.length - 20}건` : "";
-      const warningMessages = [
-        `PDF에 없어 건너뜀: ${skips.length}건`,
-        ...preview,
-        ...(extra ? [extra] : [])
-      ];
-      showWarnings(warningMessages);
-    }
+    const unusedPdf = Array.from(pdfMap.values()).filter((mrb) => !usedMrbs.has(mrb));
+    updateUnusedBox(unusedPdf);
+    updateMatchedTable(matched);
+    updateSkipSection(skips);
+    setStats({
+      totalExcelRows: rows.length,
+      totalPdfPages: pages.length,
+      totalPdfRecords: pdfMap.size,
+      matchedCount: outputLines.length,
+      skippedCount: skips.length,
+      fatalErrorCount: 0,
+      unusedPdfCount: unusedPdf.length
+    });
 
     if (outputLines.length === 0) {
       resultText.value = "";
-      resultSection.hidden = true;
+      resultSection.hidden = false;
       copyBtn.disabled = true;
+      if (ui.copyVerifyBtn) ui.copyVerifyBtn.disabled = true;
       setStatus("출력할 MRB가 없습니다(PDF에 해당 센터/CT 없음).");
       return;
     }
@@ -406,9 +845,20 @@ async function handleParse() {
     resultText.value = output;
     resultSection.hidden = false;
     copyBtn.disabled = false;
+    if (ui.copyVerifyBtn) ui.copyVerifyBtn.disabled = false;
+    latestResult = { matched };
     setStatus(`완료되었습니다. 매칭 ${outputLines.length}건`);
   } catch (err) {
     showErrors([err instanceof Error ? err.message : "처리 중 오류가 발생했습니다."]);
+    setStats({
+      totalExcelRows: 0,
+      totalPdfPages: 0,
+      totalPdfRecords: 0,
+      matchedCount: 0,
+      skippedCount: 0,
+      fatalErrorCount: 1,
+      unusedPdfCount: 0
+    });
     setStatus("검증 실패: 입력을 확인해 주세요.");
   }
 }
@@ -417,6 +867,15 @@ async function handleCopy() {
   if (!resultText.value) return;
   await navigator.clipboard.writeText(resultText.value);
   setStatus("복사가 완료되었습니다.");
+}
+
+async function handleVerifyCopy() {
+  if (!latestResult || !latestResult.matched?.length) return;
+  const lines = latestResult.matched.map((item) => {
+    return `${item.fcRaw}\t${item.ct}\t${item.mrb}`;
+  });
+  await navigator.clipboard.writeText(lines.join("\n"));
+  setStatus("검증용 복사가 완료되었습니다.");
 }
 
 parseBtn.addEventListener("click", handleParse);
