@@ -93,55 +93,16 @@ function getSheetRows(workbook, sheetName) {
   return window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
 }
 
-function extractFcFromItems(items) {
-  const tokens = items
-    .map((item) => String(item?.str ?? "").trim())
-    .filter((text) => text !== "")
-    .map((text) => ({
-      raw: text,
-      normalized: text.replace(/\s+/g, "").replace(/[：:]/g, "")
-    }));
-
-  let count = 0;
-  let fc = "";
-
-  const readNextValue = (startIndex) => {
-    for (let i = startIndex + 1; i < tokens.length; i += 1) {
-      if (tokens[i].raw) return tokens[i].raw;
-    }
-    return "";
-  };
-
-  const readInlineValue = (text) => {
-    const match = text.match(/받는\s*사람\s*[:：]?\s*(.*)$/);
-    return match ? match[1].trim() : "";
-  };
-
-  for (let i = 0; i < tokens.length; i += 1) {
-    const current = tokens[i];
-    const normalized = current.normalized;
-
-    if (normalized.startsWith("받는사람")) {
-      count += 1;
-      const inline = readInlineValue(current.raw);
-      const candidate = inline || readNextValue(i);
-      if (count === 1) fc = normalizeFc(candidate);
-      continue;
-    }
-
-    if (normalized === "받는" && tokens[i + 1]) {
-      const next = tokens[i + 1];
-      if (next.normalized.startsWith("사람")) {
-        count += 1;
-        const inline = readInlineValue(`${current.raw} ${next.raw}`);
-        const candidate = inline || readNextValue(i + 1);
-        if (count === 1) fc = normalizeFc(candidate);
-        i += 1;
-      }
-    }
+function buildRecipientHint(compactText) {
+  const keyword = "받는사람";
+  const index = compactText.indexOf(keyword);
+  if (index < 0) {
+    return "받는사람 포함: 아니오";
   }
-
-  return { fc: fc || null, count };
+  const start = Math.max(0, index - 20);
+  const end = Math.min(compactText.length, index + keyword.length + 20);
+  const snippet = compactText.slice(start, end);
+  return `받는사람 포함: 예 (스니펫: ${snippet})`;
 }
 
 async function parsePdf(file) {
@@ -163,24 +124,30 @@ function extractPdfMap(pages) {
   const issues = [];
   const map = new Map();
   const mrbRegex = /MRB\d+-\d{3}/g;
+  const fcRegex = /[-–]?받는사람[:：](.*?FC)/g;
 
-  pages.forEach(({ pageNo, text, items }) => {
-    const fcInfo = extractFcFromItems(items || []);
-    const mrbMatches = (text.replace(/\s+/g, "").match(mrbRegex) ?? []);
+  pages.forEach(({ pageNo, text }) => {
+    const raw = text;
+    const compact = raw.replace(/\s+/g, "");
+    const fcMatches = Array.from(compact.matchAll(fcRegex));
+    const mrbMatches = (compact.match(mrbRegex) ?? []);
 
-    if (fcInfo.count !== 1) {
-      issues.push(`페이지 ${pageNo}: FC는 페이지당 1개여야 합니다. (검출: ${fcInfo.count}개)`);
+    if (fcMatches.length !== 1) {
+      const reason = fcMatches.length === 0 ? "FC 검출 0개" : "FC 검출 다중";
+      issues.push(`페이지 ${pageNo}: ${reason}. ${buildRecipientHint(compact)}`);
     }
 
     if (mrbMatches.length !== 1) {
       issues.push(`페이지 ${pageNo}: MRB는 페이지당 1개여야 합니다. (검출: ${mrbMatches.length}개)`);
     }
 
-    if (fcInfo.count !== 1 || mrbMatches.length !== 1) {
+    if (fcMatches.length !== 1 || mrbMatches.length !== 1) {
       return;
     }
 
-    if (!fcInfo.fc) {
+    const fcRaw = fcMatches[0]?.[1] ?? "";
+    const fcNormalized = normalizeFc(fcRaw);
+    if (!fcNormalized) {
       issues.push(`페이지 ${pageNo}: FC가 비어 있습니다.`);
       return;
     }
@@ -194,7 +161,7 @@ function extractPdfMap(pages) {
       return;
     }
 
-    const key = `${normalizeFc(fcInfo.fc)}|${ct}`;
+    const key = `${fcNormalized}|${ct}`;
     if (!key || key.startsWith("|")) {
       issues.push(`페이지 ${pageNo}: FC를 해석할 수 없습니다.`);
       return;
