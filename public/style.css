@@ -1,0 +1,150 @@
+:root {
+  color-scheme: light;
+  font-family: "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+  background: #f5f5f7;
+  color: #1c1c1c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.container {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 40px 20px 80px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.subtitle {
+  margin: 0;
+  font-size: 14px;
+  color: #666;
+}
+
+.card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 20px;
+  border: 1px solid #e0e0e0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+}
+
+input[type="file"] {
+  padding: 10px;
+  border: 1px dashed #cfcfcf;
+  border-radius: 10px;
+  background: #fafafa;
+}
+
+.options {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+select,
+input[type="number"] {
+  padding: 10px;
+  border: 1px solid #d6d6d6;
+  border-radius: 10px;
+  background: #fff;
+  font-size: 14px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+button {
+  border: none;
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: #1c1c1c;
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+button.secondary {
+  background: #f0f0f0;
+  color: #1c1c1c;
+  border: 1px solid #d8d8d8;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.notice {
+  margin: 0;
+  font-size: 13px;
+  color: #666;
+}
+
+.error {
+  border-radius: 10px;
+  border: 1px solid #f1bcbc;
+  background: #fff5f5;
+  padding: 12px;
+  font-size: 13px;
+  color: #a10000;
+  line-height: 1.5;
+}
+
+#resultText {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid #e0e0e0;
+  padding: 12px;
+  font-size: 13px;
+  font-family: "SF Mono", "Menlo", "Consolas", monospace;
+  resize: vertical;
+}
+
+h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+@media (max-width: 640px) {
+  .container {
+    padding: 28px 16px 60px;
+  }
+}

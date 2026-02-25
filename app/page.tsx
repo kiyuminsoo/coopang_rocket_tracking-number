@@ -151,6 +151,9 @@ export default function Home() {
           {!loading && fileName && `선택된 파일: ${fileName}`}
           {!loading && !fileName && "밀크런 운송장 PDF를 업로드하세요."}
         </div>
+        <div className="notice" style={{ marginTop: 8 }}>
+          엑셀과 함께 사용하는 도구는 <a href="/index.html">/index.html</a>에서 열어 주세요.
+        </div>
         {error && (
           <div className="error-block">
             <div className="error">{error}</div>
