@@ -392,10 +392,10 @@ function ensureStatsSection() {
 
   const items = [
     { key: "totalExcelRows", label: "엑셀 대상 행 수" },
-    { key: "totalPdfRecords", label: "PDF 페이지/레코드 수" },
+    { key: "totalPdfRecords", label: "PDF 페이지 / 레코드 수" },
     { key: "matchedCount", label: "매칭 성공" },
     { key: "skippedCount", label: "PLT 출고(밀크런 송장 미발행)로 제외" },
-    { key: "fatalErrorCount", label: "치명적 오류" },
+    { key: "fatalErrorCount", label: "오류 건수" },
     { key: "unusedPdfCount", label: "PDF 미사용 MRB" }
   ];
 
@@ -435,6 +435,28 @@ function ensureStatsSection() {
 function setStats(stats) {
   ensureStatsSection();
   ui.statsSection.hidden = false;
+
+  let errorDisplay = "-";
+  if (typeof stats.fatalErrorCount === "object") {
+    const { pdf = 0, excel = 0, match = 0, global = 0, total = 0 } = stats.fatalErrorCount;
+    if (total > 0) {
+      const parts = [];
+      if (pdf > 0) parts.push(`PDF: ${pdf}건`);
+      if (excel > 0) parts.push(`엑셀: ${excel}건`);
+      if (match > 0) parts.push(`매칭: ${match}건`);
+      if (global > 0 && parts.length === 0) parts.push(`기타: ${global}건`);
+      errorDisplay = `${parts.join(" / ")} (총 ${total}건)`;
+      // 가독성을 위해 내용이 길면 폰트 크기 축소
+      ui.statsValues.fatalErrorCount.style.fontSize = "13px";
+    } else {
+      errorDisplay = "0건";
+      ui.statsValues.fatalErrorCount.style.fontSize = "18px";
+    }
+  } else {
+    errorDisplay = stats.fatalErrorCount !== undefined ? `${stats.fatalErrorCount}건` : "-";
+    ui.statsValues.fatalErrorCount.style.fontSize = "18px";
+  }
+
   const map = {
     totalExcelRows: stats.totalExcelRows ?? "-",
     totalPdfRecords: stats.totalPdfPages !== undefined
@@ -442,7 +464,7 @@ function setStats(stats) {
       : "-",
     matchedCount: stats.matchedCount ?? "-",
     skippedCount: stats.skippedCount ?? "-",
-    fatalErrorCount: stats.fatalErrorCount ?? "-",
+    fatalErrorCount: errorDisplay,
     unusedPdfCount: stats.unusedPdfCount ?? "-"
   };
   Object.entries(map).forEach(([key, value]) => {
@@ -964,7 +986,7 @@ async function handleParse() {
       totalPdfRecords: 0,
       matchedCount: 0,
       skippedCount: 0,
-      fatalErrorCount: 0,
+      fatalErrorCount: { total: 0 },
       unusedPdfCount: 0
     });
     if (errors.length) {
@@ -975,7 +997,7 @@ async function handleParse() {
         totalPdfRecords: 0,
         matchedCount: 0,
         skippedCount: 0,
-        fatalErrorCount: errors.length,
+        fatalErrorCount: { excel: errors.length, total: errors.length },
         unusedPdfCount: 0
       });
       setStatus("검증 실패: 엑셀 입력 오류");
@@ -989,7 +1011,7 @@ async function handleParse() {
         totalPdfRecords: 0,
         matchedCount: 0,
         skippedCount: 0,
-        fatalErrorCount: 1,
+        fatalErrorCount: { excel: 1, total: 1 },
         unusedPdfCount: 0
       });
       setStatus("검증 실패: 엑셀 입력 오류");
@@ -1005,7 +1027,7 @@ async function handleParse() {
         totalPdfRecords: 0,
         matchedCount: 0,
         skippedCount: 0,
-        fatalErrorCount: 1,
+        fatalErrorCount: { pdf: 1, total: 1 },
         unusedPdfCount: 0
       });
       setStatus("검증 실패: 입고예정일자 확인");
@@ -1021,7 +1043,7 @@ async function handleParse() {
         totalPdfRecords: 0,
         matchedCount: 0,
         skippedCount: 0,
-        fatalErrorCount: 1,
+        fatalErrorCount: { excel: 1, total: 1 },
         unusedPdfCount: 0
       });
       setStatus("검증 실패: 완료 파일 입고일 확인");
@@ -1055,7 +1077,7 @@ async function handleParse() {
         totalPdfRecords: 0,
         matchedCount: 0,
         skippedCount: 0,
-        fatalErrorCount: 1,
+        fatalErrorCount: { global: 1, total: 1 },
         unusedPdfCount: 0
       });
       setStatus("검증 실패: 입고일 불일치");
@@ -1069,7 +1091,7 @@ async function handleParse() {
       totalPdfRecords: pdfMap.size,
       matchedCount: 0,
       skippedCount: 0,
-      fatalErrorCount: 0,
+      fatalErrorCount: { total: 0 },
       unusedPdfCount: 0
     });
     if (pdfIssues.length) {
@@ -1080,7 +1102,7 @@ async function handleParse() {
         totalPdfRecords: pdfMap.size,
         matchedCount: 0,
         skippedCount: 0,
-        fatalErrorCount: pdfIssues.length,
+        fatalErrorCount: { pdf: pdfIssues.length, total: pdfIssues.length },
         unusedPdfCount: 0
       });
       setStatus("검증 실패: PDF에서 문제가 발견되었습니다.");
@@ -1094,7 +1116,7 @@ async function handleParse() {
         totalPdfRecords: 0,
         matchedCount: 0,
         skippedCount: 0,
-        fatalErrorCount: 1,
+        fatalErrorCount: { pdf: 1, total: 1 },
         unusedPdfCount: 0
       });
       setStatus("검증 실패: PDF 인식 오류");
@@ -1110,7 +1132,7 @@ async function handleParse() {
         totalPdfRecords: pdfMap.size,
         matchedCount: 0,
         skippedCount: 0,
-        fatalErrorCount: outputIssues.length,
+        fatalErrorCount: { match: outputIssues.length, total: outputIssues.length },
         unusedPdfCount: 0
       });
       setStatus("검증 실패: 엑셀/PDF 매칭 오류");
