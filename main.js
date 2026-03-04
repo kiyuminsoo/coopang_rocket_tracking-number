@@ -802,12 +802,33 @@ function ensureArrivalDateInput() {
     updateArrivalWarning();
   });
 
-  textInput.addEventListener("input", () => {
-    const normalized = normalizeDateInput(textInput.value);
+  textInput.addEventListener("input", (e) => {
+    // 숫자가 아닌 문자 제거
+    let value = textInput.value.replace(/\D/g, "");
+    
+    // 최대 8자리(숫자 기준)로 제한
+    if (value.length > 8) {
+      value = value.slice(0, 8);
+    }
+
+    // YYYY-MM-DD 형식으로 변환
+    let formatted = "";
+    if (value.length <= 4) {
+      formatted = value;
+    } else if (value.length <= 6) {
+      formatted = value.slice(0, 4) + "-" + value.slice(4);
+    } else {
+      formatted = value.slice(0, 4) + "-" + value.slice(4, 6) + "-" + value.slice(6);
+    }
+
+    // 입력값 업데이트
+    textInput.value = formatted;
+
+    // 기존 연동 로직 유지
+    const normalized = normalizeDateInput(formatted);
     if (normalized) {
       dateInput.value = normalized;
-      textInput.value = normalized;
-    } else if (textInput.value.trim() === "") {
+    } else if (formatted.trim() === "") {
       dateInput.value = "";
     }
     updateInputAvailability();
